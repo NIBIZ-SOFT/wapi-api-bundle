@@ -1,0 +1,60 @@
+# ==================================
+# STRIPE CONFIGURATION
+# ==================================
+# Get these from: https://dashboard.stripe.com/apikeys
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+
+# ==================================
+# RAZORPAY CONFIGURATION
+# ==================================
+# Get these from: https://dashboard.razorpay.com/app/keys
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+RAZORPAY_WEBHOOK_SECRET=
+
+# ==================================
+# WEBHOOK URLS (For Testing)
+# ==================================
+# Stripe Webhook URL: https://yourdomain.com/api/webhook/stripe
+# Razorpay Webhook URL: https://yourdomain.com/api/webhook/razorpay
+
+# ==================================
+# OTHER EXISTING CONFIGURATIONS
+# ==================================
+# Add your other existing environment variables here
+JWT_SECRET=your_jwt_secret_here
+MONGODB_URI=
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+REDIS_URL= # Use this if you have a Redis connection string instead of individual params
+ALLOWED_ORIGINS=http://localhost:5000,http://localhost:5173,http://127.0.0.1:5500,http://127.0.0.1:5000,http://localhost:3000,http://localhost:3001
+ADMIN_NAME=admin_name
+ADMIN_EMAIL=admin_email
+ADMIN_PASSWORD=admin_password
+WHATSAPP_VERIFY_TOKEN=VERIFYTOKEN
+APP_URL=
+SMTP_HOST=
+SMTP_PORT=
+SMTP_USER=
+SMTP_PASS=
+MAIL_FROM_NAME=
+MAIL_FROM_EMAIL=
+SUPPORT_EMAIL=
+MAINTENANCE_MODE=false
+SERVER_ADDR=
+APP_URL=
+APP_ID=VVlHTldWMk4wSQ==
+DOTENV_EDIT=true
+PORT=
+FACEBOOK_LEAD_WEBHOOK_VERIFY_TOKEN=VERIFYTOKEN
+STRIPE_PUBLISHABLE_KEY=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=you_app_url/api/google/callback
+ENCRYPTION_KEY=v8y/A?D(G+KbPeShVmYq3t6w9z$C&E)H # 32 chars
+FRONTEND_URL=http://localhost:5173
+MONGO_URI=
+ELEVENLABS_API_KEY=
+OPENAI_API_KEY=

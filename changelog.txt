@@ -1,0 +1,78 @@
+]633;E;echo "Read the README.txt first to understand how to use changelog.txt and/or changed-files";d2241211-c76b-49d7-8065-ffd203bbb7f5]633;CRead the README.txt first to understand how to use changelog.txt and/or changed-files
+
+M = modified ( replace file in your project )
+A = added    ( add     file in your project )
+D = deleted  ( delete  file in your project )
+R = renamed  ( rename  file in your project )
+
+4 Added | 0 Deleted | 65 Modified | 0 Renamed
+---
+M	app.js
+M	controllers/admin-template.controller.js
+M	controllers/automation.controller.js
+M	controllers/campaign.controller.js
+M	controllers/chat.controller.js
+M	controllers/chatbot.controller.js
+M	controllers/contact.controller.js
+M	controllers/ecommerce-catalog.controller.js
+M	controllers/formBuilder.controller.js
+M	controllers/google.controller.js
+M	controllers/landing-page.controller.js
+M	controllers/setting.controller.js
+M	controllers/social-automation.controller.js
+M	controllers/telegram-webhook.controller.js
+M	controllers/template.controller.js
+M	controllers/unified-whatsapp.controller.js
+M	controllers/user-setting.controller.js
+M	controllers/whatsapp-webhook.controller.js
+M	controllers/workspace.controller.js
+A	cronjob/snooze.cronService.js
+M	models/automation-flow.model.js
+M	models/campaign.model.js
+M	models/chatbot.model.js
+M	models/contact.model.js
+A	models/google-form.model.js
+M	models/index.js
+M	models/landing-page.model.js
+M	models/message.model.js
+M	models/setting.model.js
+M	models/user-setting.model.js
+A	nodemon.json
+M	package.json
+M	routes/appointment.routes.js
+M	routes/campaign.routes.js
+M	routes/google.routes.js
+M	routes/setting.routes.js
+M	routes/template.routes.js
+M	routes/unified-whatsapp.routes.js
+M	seeder/seed-landing-page.js
+M	seeder/seedAIModels.js
+M	seeder/seedAdminTemplates.js
+M	seeder/seedAuthPageSetup.js
+M	seeder/seedCurrency.js
+M	seeder/seedDefaultSettings.js
+M	seeder/seedGuide.js
+M	seeder/seedLanguage.js
+M	seeder/seedPermission.js
+M	server.js
+M	services/messaging/omnichannel.service.js
+M	services/messaging/providers/facebook.provider.js
+M	services/messaging/providers/instagram.provider.js
+M	services/messaging/social-automation.service.js
+M	services/whatsapp/meta-flow.service.js
+M	services/whatsapp/providers/baileys.provider.js
+M	services/whatsapp/providers/business-api.provider.js
+M	services/whatsapp/unified-whatsapp.service.js
+M	utils/automated-response-worker.js
+M	utils/automated-response.service.js
+M	utils/automation-engine.js
+M	utils/aws-storage.js
+M	utils/campaign-job-processor.js
+M	utils/campaign-processing.js
+M	utils/campaign-scheduler.js
+M	utils/campaign-stats.service.js
+M	utils/google-api-helper.js
+M	utils/message-status.service.js
+M	utils/upload.js
+M	utils/uploadMediaToWhatsapp.js
+A	utils/voice-ai.service.js
