@@ -12,83 +12,139 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build API
+  deploy:
+    name: Build and Deploy API
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      # ---------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ---------------------------------------------------------
+      # 2. Node.js
+      # ---------------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
-      - name: Install dependencies
-        run: npm install --package-lock=false
-
-      - name: Create release archive
+      # ---------------------------------------------------------
+      # 3. Create archive (Skip heavy node_modules)
+      # ---------------------------------------------------------
+      - name: Create deployment archive
         run: |
-          tar -czf ../api.tar.gz \
+          set -e
+
+          tar \
+            -czf ../api.tar.gz \
             --exclude=.git \
             --exclude=.github \
             --exclude=node_modules \
             --exclude=changed-files \
             .
+            
           mv ../api.tar.gz ./api.tar.gz
 
-      - name: Upload release
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT || 22 }}
-          source: "api.tar.gz"
-          target: "/tmp"
+          echo "Archive created:"
+          ls -lh api.tar.gz
 
-      - name: Deploy
-        uses: appleboy/ssh-action@v1.2.2
-        env:
-          APP_NAME: wajobab-api
-          APP_DIR: /home/wajobab.chat/public_html/api.wajobab.chat
-          PORT: 3102
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT || 22 }}
-          envs: APP_NAME,APP_DIR,PORT
-          script: |
-            set -e
+      # ---------------------------------------------------------
+      # 4. Configure SSH
+      # ---------------------------------------------------------
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -e
 
-            RELEASE="$(date +%Y%m%d-%H%M%S)"
+          mkdir -p "$HOME/.ssh"
 
-            mkdir -p "$APP_DIR/releases/$RELEASE"
+          printf '%s\n' \
+            '${{ secrets.SERVER_SSH_KEY }}' \
+            > "$HOME/.ssh/wajobab"
 
-            tar -xzf /tmp/api.tar.gz \
-              -C "$APP_DIR/releases/$RELEASE"
+          chmod 600 "$HOME/.ssh/wajobab"
 
-            rm -f /tmp/api.tar.gz
+          echo "Validating SSH private key..."
 
-            ln -sfn \
-              "$APP_DIR/releases/$RELEASE" \
-              "$APP_DIR/current"
+          ssh-keygen \
+            -y \
+            -f "$HOME/.ssh/wajobab" \
+            > /dev/null
 
-            cd "$APP_DIR/current"
+          echo "Adding server to known_hosts..."
 
-            npm install --omit=dev --no-package-lock
+          ssh-keyscan \
+            -H \
+            '${{ secrets.SERVER_HOST }}' \
+            >> "$HOME/.ssh/known_hosts"
 
-            if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-              pm2 reload "$APP_NAME" --update-env
-            else
-              PORT="$PORT" \
-              NODE_ENV=production \
-              pm2 start server.js \
-                --name "$APP_NAME"
-            fi
+          chmod 644 "$HOME/.ssh/known_hosts"
 
-            pm2 save
+      # ---------------------------------------------------------
+      # 5. Test SSH connection
+      # ---------------------------------------------------------
+      - name: Test SSH connection
+        shell: bash
+        run: |
+          set -e
 
-            echo "API deployed successfully"
+          ssh \
+            -i "$HOME/.ssh/wajobab" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            '${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}' \
+            "echo SSH_CONNECTION_OK && whoami"
+
+      # ---------------------------------------------------------
+      # 6. Upload production artifact
+      # ---------------------------------------------------------
+      - name: Upload deployment artifact
+        shell: bash
+        run: |
+          set -e
+
+          echo "Uploading api.tar.gz..."
+
+          scp \
+            -O \
+            -i "$HOME/.ssh/wajobab" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            api.tar.gz \
+            '${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/api.tar.gz'
+
+          echo "Upload completed."
+
+      # ---------------------------------------------------------
+      # 7. Deploy on server
+      # ---------------------------------------------------------
+      - name: Deploy application
+        shell: bash
+        run: |
+          set -e
+
+          ssh \
+            -i "$HOME/.ssh/wajobab" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            '${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}' \
+            "echo '${{ secrets.SERVER_PASSWORD }}' | sudo -S /usr/local/bin/wajobab-deploy api /tmp/api.tar.gz"
+
+      # ---------------------------------------------------------
+      # 8. Deployment finished
+      # ---------------------------------------------------------
+      - name: Deployment completed
+        run: |
+          echo "=========================================="
+          echo " API DEPLOYMENT SUCCESSFUL"
+          echo "=========================================="
+          echo "Domain:   api.wajobab.chat"
+          echo "Server:   ${{ secrets.SERVER_HOST }}"
+          echo "User:     ${{ secrets.SERVER_USER }}"
+          echo "=========================================="
