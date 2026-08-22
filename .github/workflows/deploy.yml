@@ -30,13 +30,13 @@ jobs:
 
       - name: Create release archive
         run: |
-          tar -czf api.tar.gz \
+          tar -czf ../api.tar.gz \
             --exclude=.git \
             --exclude=.github \
             --exclude=node_modules \
             --exclude=changed-files \
-            --exclude=api.tar.gz \
             .
+          mv ../api.tar.gz ./api.tar.gz
 
       - name: Upload release
         uses: appleboy/scp-action@v0.1.7
