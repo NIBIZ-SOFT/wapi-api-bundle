@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../Wapi-admin"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../wapi-documentation"
+		},
+		{
+			"path": "../Wapi-frontend"
+		}
+	]
+}
