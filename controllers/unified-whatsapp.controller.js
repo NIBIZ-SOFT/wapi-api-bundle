@@ -1615,7 +1615,8 @@ export const getContactProfile = async (req, res) => {
       contact: {
         _id: contact._id.toString(),
         name: contact.name,
-        phone_number: displayName,
+        display_name: displayName,
+        phone_number: contact.phone_number || "",
         whatsapp_username: contact.whatsapp_username || null,
         whatsapp_bsuid: contact.whatsapp_bsuid || null,
         email: contact.email,
@@ -3032,18 +3033,23 @@ export const getRecentChats = async (req, res) => {
       created_by: contactsOwnerId,
       deleted_at: null
     })
-      .select('_id phone_number name tags is_pinned is_snoozed chat_status')
+      .select('_id phone_number name tags is_pinned is_snoozed chat_status whatsapp_bsuid whatsapp_username')
       .populate('tags', 'label color')
       .lean();
 
     const contactMap = userContacts.reduce((acc, contact) => {
-      acc[contact.phone_number] = {
+      const info = {
         id: contact._id.toString(),
         name: contact.name,
+        phone_number: contact.phone_number,
+        whatsapp_bsuid: contact.whatsapp_bsuid || null,
+        whatsapp_username: contact.whatsapp_username || null,
         chat_status: contact.chat_status || 'open',
         is_pinned: contact.is_pinned === true,
         is_snoozed: contact.is_snoozed === true
       };
+      if (contact.phone_number) acc[contact.phone_number] = info;
+      if (contact.whatsapp_bsuid) acc[contact.whatsapp_bsuid] = info;
       return acc;
     }, {});
 
@@ -3134,6 +3140,9 @@ export const getRecentChats = async (req, res) => {
         const contactInfo = contactMap[chat.contact.number] || {
           id: null,
           name: chat.contact.number,
+          phone_number: chat.contact.number,
+          whatsapp_bsuid: null,
+          whatsapp_username: null,
           is_pinned: false,
           is_snoozed: false
         };
@@ -3147,6 +3156,8 @@ export const getRecentChats = async (req, res) => {
           displayName = contactInfo.name;
         }
 
+        const realPhoneNumber = contactInfo.phone_number || chat.contact.phone_number || chat.contact.number;
+
         return {
           ...chat,
           is_pinned: isPinned,
@@ -3155,7 +3166,10 @@ export const getRecentChats = async (req, res) => {
             ...chat.contact,
             id: contactId,
             number: displayName,
-            name: contactInfo.name,
+            name: contactInfo.name || displayName,
+            phone_number: realPhoneNumber,
+            whatsapp_bsuid: contactInfo.whatsapp_bsuid || chat.contact.whatsapp_bsuid || null,
+            whatsapp_username: contactInfo.whatsapp_username || chat.contact.whatsapp_username || null,
             is_pinned: isPinned,
             is_snoozed: isSnoozed,
             chat_status: contactInfo.chat_status || 'open',
@@ -3168,6 +3182,9 @@ export const getRecentChats = async (req, res) => {
         const contactInfo = contactMap[chat.contact.number] || {
           id: null,
           name: chat.contact.number,
+          phone_number: chat.contact.number,
+          whatsapp_bsuid: null,
+          whatsapp_username: null,
           is_pinned: false,
           is_snoozed: false
         };
@@ -3181,6 +3198,8 @@ export const getRecentChats = async (req, res) => {
           displayName = contactInfo.name;
         }
 
+        const realPhoneNumber = contactInfo.phone_number || chat.contact.phone_number || chat.contact.number;
+
         return {
           ...chat,
           is_pinned: isPinned,
@@ -3189,7 +3208,10 @@ export const getRecentChats = async (req, res) => {
             ...chat.contact,
             id: contactId,
             number: displayName,
-            name: contactInfo.name,
+            name: contactInfo.name || displayName,
+            phone_number: realPhoneNumber,
+            whatsapp_bsuid: contactInfo.whatsapp_bsuid || chat.contact.whatsapp_bsuid || null,
+            whatsapp_username: contactInfo.whatsapp_username || chat.contact.whatsapp_username || null,
             is_pinned: isPinned,
             is_snoozed: isSnoozed,
             chat_status: contactInfo.chat_status || 'open',
