@@ -11,6 +11,11 @@ concurrency:
   group: wajobab-api-production
   cancel-in-progress: true
 
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST || '147.93.31.214' }}
+  SERVER_USER: ${{ secrets.SERVER_USER || 'root' }}
+  SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD || 'RsmMonaem66@@' }}
+
 jobs:
   deploy:
     name: Build and Deploy API
@@ -54,71 +59,38 @@ jobs:
           ls -lh api.tar.gz
 
       # ---------------------------------------------------------
-      # 4. Configure SSH
+      # 4. Install sshpass
       # ---------------------------------------------------------
-      - name: Configure SSH
-        shell: bash
+      - name: Install sshpass
         run: |
-          set -e
-
-          mkdir -p "$HOME/.ssh"
-
-          printf '%s\n' \
-            '${{ secrets.SERVER_SSH_KEY }}' \
-            > "$HOME/.ssh/wajobab"
-
-          chmod 600 "$HOME/.ssh/wajobab"
-
-          echo "Validating SSH private key..."
-
-          ssh-keygen \
-            -y \
-            -f "$HOME/.ssh/wajobab" \
-            > /dev/null
-
-          echo "Adding server to known_hosts..."
-
-          ssh-keyscan \
-            -H \
-            '${{ secrets.SERVER_HOST }}' \
-            >> "$HOME/.ssh/known_hosts"
-
-          chmod 644 "$HOME/.ssh/known_hosts"
+          sudo apt-get update -y
+          sudo apt-get install -y sshpass
 
       # ---------------------------------------------------------
       # 5. Test SSH connection
       # ---------------------------------------------------------
       - name: Test SSH connection
-        shell: bash
         run: |
-          set -e
-
-          ssh \
-            -i "$HOME/.ssh/wajobab" \
-            -o IdentitiesOnly=yes \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            '${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}' \
-            "echo SSH_CONNECTION_OK && whoami"
+          sshpass -p "$SERVER_PASSWORD" \
+            ssh -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                "$SERVER_USER@$SERVER_HOST" \
+                "echo SSH_CONNECTION_OK && whoami"
 
       # ---------------------------------------------------------
       # 6. Upload production artifact
       # ---------------------------------------------------------
       - name: Upload deployment artifact
-        shell: bash
         run: |
           set -e
-
           echo "Uploading api.tar.gz..."
 
-          scp \
-            -O \
-            -i "$HOME/.ssh/wajobab" \
-            -o IdentitiesOnly=yes \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            api.tar.gz \
-            '${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/api.tar.gz'
+          sshpass -p "$SERVER_PASSWORD" \
+            scp -O \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                api.tar.gz \
+                "$SERVER_USER@$SERVER_HOST:/tmp/api.tar.gz"
 
           echo "Upload completed."
 
@@ -126,17 +98,14 @@ jobs:
       # 7. Deploy on server
       # ---------------------------------------------------------
       - name: Deploy application
-        shell: bash
         run: |
           set -e
 
-          ssh \
-            -i "$HOME/.ssh/wajobab" \
-            -o IdentitiesOnly=yes \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            '${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}' \
-            "echo '${{ secrets.SERVER_PASSWORD }}' | sudo -S /usr/local/bin/wajobab-deploy api /tmp/api.tar.gz"
+          sshpass -p "$SERVER_PASSWORD" \
+            ssh -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                "$SERVER_USER@$SERVER_HOST" \
+                "/usr/local/bin/wajobab-deploy api /tmp/api.tar.gz"
 
       # ---------------------------------------------------------
       # 8. Deployment finished
@@ -147,6 +116,6 @@ jobs:
           echo " API DEPLOYMENT SUCCESSFUL"
           echo "=========================================="
           echo "Domain:   api.wajobab.chat"
-          echo "Server:   ${{ secrets.SERVER_HOST }}"
-          echo "User:     ${{ secrets.SERVER_USER }}"
+          echo "Server:   $SERVER_HOST"
+          echo "User:     $SERVER_USER"
           echo "=========================================="
