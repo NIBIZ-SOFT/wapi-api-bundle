@@ -34,6 +34,12 @@ const getAgentAllowedPhoneNumber = async (agentId, contactPhoneNumber, whatsappP
     .populate('waba_id')
     .lean();
   if (!phoneNumber || !phoneNumber.waba_id) return null;
+
+  const agentUser = await User.findById(agentId).lean();
+  if (agentUser && agentUser.created_by && phoneNumber.user_id && agentUser.created_by.toString() === phoneNumber.user_id.toString()) {
+    return phoneNumber;
+  }
+
   const businessNumber = phoneNumber.display_phone_number;
   const chatMatch = {
     $or: [
@@ -2002,12 +2008,6 @@ export const getMessages = async (req, res) => {
 
     let resolvedWhatsappPhoneNumberId = whatsappPhoneNumberId;
     if (!resolvedWhatsappPhoneNumberId) {
-      if (req.user.role === 'agent') {
-        return res.status(400).json({
-          success: false,
-          error: 'whatsapp_phone_number_id is required for agents (use the phone number of the assigned chat).'
-        });
-      }
       const primaryPhoneNumber = await WhatsappPhoneNumber.findOne({
         user_id: userId,
         is_primary: true,
@@ -2015,14 +2015,23 @@ export const getMessages = async (req, res) => {
         deleted_at: null
       }).lean();
 
-      if (!primaryPhoneNumber) {
-        return res.status(400).json({
-          success: false,
-          error: 'No primary phone number found. Please set a primary phone number or provide a WhatsApp Phone Number ID.'
-        });
+      if (primaryPhoneNumber) {
+        resolvedWhatsappPhoneNumberId = primaryPhoneNumber._id.toString();
+      } else {
+        const anyPhoneNumber = await WhatsappPhoneNumber.findOne({
+          user_id: userId,
+          is_active: true,
+          deleted_at: null
+        }).lean();
+        if (anyPhoneNumber) resolvedWhatsappPhoneNumberId = anyPhoneNumber._id.toString();
       }
 
-      resolvedWhatsappPhoneNumberId = primaryPhoneNumber._id.toString();
+      if (!resolvedWhatsappPhoneNumberId) {
+        return res.status(400).json({
+          success: false,
+          error: 'No phone number found. Please set a primary phone number or provide a WhatsApp Phone Number ID.'
+        });
+      }
     }
 
     let whatsappPhoneNumber = null;
@@ -2901,16 +2910,16 @@ export const getRecentChats = async (req, res) => {
         }
       }
       const uniquePhoneIds = [...phoneIds];
-      if (uniquePhoneIds.length === 0) {
-        return res.status(200).json({ success: true, data: [] });
+      if (uniquePhoneIds.length === 1) {
+        resolvedWhatsappPhoneNumberId = uniquePhoneIds[0];
+      } else if (!resolvedWhatsappPhoneNumberId) {
+        const defaultPhone = await WhatsappPhoneNumber.findOne({
+          user_id: contactsOwnerId,
+          is_active: true,
+          deleted_at: null
+        }).sort({ is_primary: -1 }).lean();
+        if (defaultPhone) resolvedWhatsappPhoneNumberId = defaultPhone._id.toString();
       }
-      if (uniquePhoneIds.length > 1) {
-        return res.status(400).json({
-          success: false,
-          error: 'Multiple assigned chats use different phone numbers. Please pass whatsapp_phone_number_id to list chats for a specific number.'
-        });
-      }
-      resolvedWhatsappPhoneNumberId = uniquePhoneIds[0];
     }
 
     if (resolvedWhatsappPhoneNumberId) {
@@ -2929,36 +2938,11 @@ export const getRecentChats = async (req, res) => {
       }
 
       if (req.user.role === 'agent') {
-        const assignmentQuery = {
-          agent_id: req.user.id,
-          $or: [{ status: 'assigned' }, { status: { $exists: false } }]
-        };
-        if (mongoose.Types.ObjectId.isValid(resolvedWhatsappPhoneNumberId)) {
-          assignmentQuery.whatsapp_phone_number_id = resolvedWhatsappPhoneNumberId;
-        }
-
-        let agentHasAssignment = await ChatAssignment.findOne(assignmentQuery).lean();
-        if (!agentHasAssignment) {
-          const legacy = await ChatAssignment.findOne({
-            agent_id: req.user.id,
-            whatsapp_phone_number_id: { $exists: false },
-            $or: [{ status: 'assigned' }, { status: { $exists: false } }]
-          }).select('assigned_by sender_number receiver_number').lean();
-          if (legacy) {
-            const phone = await WhatsappPhoneNumber.findOne({
-              user_id: legacy.assigned_by,
-              display_phone_number: { $in: [legacy.sender_number, legacy.receiver_number] },
-              _id: resolvedWhatsappPhoneNumberId,
-              deleted_at: null
-            }).lean();
-            agentHasAssignment = !!phone;
-          }
-        }
-        if (!agentHasAssignment) {
-          return res.status(200).json({
-            success: true,
-            data: [],
-            message: 'You do not have any assigned chats for this phone number'
+        const belongsToOrg = whatsappPhoneNumber.user_id && req.user.owner_id && (whatsappPhoneNumber.user_id.toString() === req.user.owner_id.toString());
+        if (!belongsToOrg) {
+          return res.status(403).json({
+            success: false,
+            error: 'You do not have access to this phone number'
           });
         }
       }
@@ -3003,7 +2987,7 @@ export const getRecentChats = async (req, res) => {
     const { page, limit } = parsePaginationParams({ ...req.query, limit: req.query.limit || 15 });
 
     let assignedNumbersArr = [];
-    if (req.user.role === 'agent' && myPhoneNumber) {
+    if (req.user.role === 'agent' && myPhoneNumber && (req.query.is_assigned === 'true' || req.query.is_assigned === true)) {
       const assignments = await ChatAssignment.find({
         agent_id: req.user.id,
         whatsapp_phone_number_id: resolvedWhatsappPhoneNumberId,

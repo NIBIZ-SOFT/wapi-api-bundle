@@ -30,14 +30,17 @@ export const checkPermission = (permissionSlug) => {
         return next();
       }
 
-      const permissionDoc = await Permission.findOne({ slug: permissionSlug }).lean();
+      const slugs = Array.isArray(permissionSlug) ? permissionSlug : [permissionSlug];
+      const permissionDocs = await Permission.find({ slug: { $in: slugs } }).lean();
 
-      if (!permissionDoc) {
+      if (!permissionDocs || permissionDocs.length === 0) {
         return res.status(403).json({
           success: false,
           message: 'Invalid permission requested'
         });
       }
+
+      const permIds = permissionDocs.map(p => p._id);
 
       if (userRole.name === 'agent') {
         if (!user.team_id) {
@@ -49,7 +52,7 @@ export const checkPermission = (permissionSlug) => {
 
         const hasPermission = await TeamPermission.exists({
           team_id: user.team_id,
-          permission_id: permissionDoc._id
+          permission_id: { $in: permIds }
         });
 
         if (!hasPermission) {
@@ -64,7 +67,7 @@ export const checkPermission = (permissionSlug) => {
 
       const hasPermission = await RolePermission.exists({
         role_id: userRole._id,
-        permission_id: permissionDoc._id
+        permission_id: { $in: permIds }
       });
 
       if (!hasPermission) {
