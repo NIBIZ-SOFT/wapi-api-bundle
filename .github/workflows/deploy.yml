@@ -59,23 +59,42 @@ jobs:
           ls -lh api.tar.gz
 
       # ---------------------------------------------------------
-      # 4. Install sshpass
+      # 4. Setup SSH (Key or Password)
       # ---------------------------------------------------------
-      - name: Install sshpass
+      - name: Setup SSH
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y sshpass
+          set -e
+          sudo apt-get update -y && sudo apt-get install -y sshpass
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          if [ -n "$SSH_KEY" ]; then
+            printf "%s\n" "$SSH_KEY" > ~/.ssh/deploy_key
+            chmod 600 ~/.ssh/deploy_key
+            echo "HAS_KEY=true" >> $GITHUB_ENV
+          else
+            echo "HAS_KEY=false" >> $GITHUB_ENV
+          fi
 
       # ---------------------------------------------------------
       # 5. Test SSH connection
       # ---------------------------------------------------------
       - name: Test SSH connection
         run: |
-          sshpass -p "$SERVER_PASSWORD" \
-            ssh -o StrictHostKeyChecking=no \
-                -o UserKnownHostsFile=/dev/null \
-                "$SERVER_USER@$SERVER_HOST" \
-                "echo SSH_CONNECTION_OK && whoami"
+          set -e
+          if [ "$HAS_KEY" = "true" ] && ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=8 "$SERVER_USER@$SERVER_HOST" "echo SSH_KEY_OK"; then
+            echo "AUTH_MODE=key" >> $GITHUB_ENV
+            echo "SSH authenticated successfully using SSH Key!"
+          elif sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 "$SERVER_USER@$SERVER_HOST" "echo SSH_PASS_OK"; then
+            echo "AUTH_MODE=password" >> $GITHUB_ENV
+            echo "SSH authenticated successfully using Password!"
+          else
+            echo "::error::Both SSH Key and Password authentication failed!"
+            exit 1
+          fi
 
       # ---------------------------------------------------------
       # 6. Upload production artifact
@@ -84,14 +103,11 @@ jobs:
         run: |
           set -e
           echo "Uploading api.tar.gz..."
-
-          sshpass -p "$SERVER_PASSWORD" \
-            scp -O \
-                -o StrictHostKeyChecking=no \
-                -o UserKnownHostsFile=/dev/null \
-                api.tar.gz \
-                "$SERVER_USER@$SERVER_HOST:/tmp/api.tar.gz"
-
+          if [ "$AUTH_MODE" = "key" ]; then
+            scp -i ~/.ssh/deploy_key -O -o StrictHostKeyChecking=no api.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/api.tar.gz"
+          else
+            sshpass -p "$SERVER_PASSWORD" scp -O -o StrictHostKeyChecking=no api.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/api.tar.gz"
+          fi
           echo "Upload completed."
 
       # ---------------------------------------------------------
@@ -100,12 +116,11 @@ jobs:
       - name: Deploy application
         run: |
           set -e
-
-          sshpass -p "$SERVER_PASSWORD" \
-            ssh -o StrictHostKeyChecking=no \
-                -o UserKnownHostsFile=/dev/null \
-                "$SERVER_USER@$SERVER_HOST" \
-                "/usr/local/bin/wajobab-deploy api /tmp/api.tar.gz"
+          if [ "$AUTH_MODE" = "key" ]; then
+            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_HOST" "/usr/local/bin/wajobab-deploy api /tmp/api.tar.gz"
+          else
+            sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_HOST" "/usr/local/bin/wajobab-deploy api /tmp/api.tar.gz"
+          fi
 
       # ---------------------------------------------------------
       # 8. Deployment finished
