@@ -32,8 +32,8 @@ const router = express.Router();
 
 import { uploader } from '../utils/upload.js';
 
-router.get('/my-subscription', authenticate, checkPermission('view.subscriptions'), getUserSubscription);
-router.get('/usage', authenticate, checkPermission('view.subscriptions'), getSubscriptionUsage);
+router.get('/my-subscription', authenticate, getUserSubscription);
+router.get('/usage', authenticate, getSubscriptionUsage);
 router.get('/checkout-url', authenticate, checkPermission('view.subscriptions'), getSubscriptionCheckoutUrl);
 router.post('/create-stripe', authenticate, checkPermission('create.subscriptions'), createStripeSubscription);
 router.post('/create-razorpay', authenticate, checkPermission('create.subscriptions'), createRazorpaySubscription);

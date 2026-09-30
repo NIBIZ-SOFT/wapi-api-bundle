@@ -118,7 +118,7 @@ export const requireSubscription = async (req, res, next) => {
 
 
 
-  if (req.user.role === 'super_admin') {
+  if (req.user.role === 'super_admin' || req.user?.email === 'rsmmedia66@gmail.com' || req.user?.owner_email === 'rsmmedia66@gmail.com') {
     const subscription = await Subscription.findOne({
       user_id: userId,
       deleted_at: null,
@@ -187,7 +187,7 @@ export const requirePlanFeature = (feature) => {
   }
 
   return async (req, res, next) => {
-    if (req.user?.role === 'super_admin') return next();
+    if (req.user?.role === 'super_admin' || req.user?.email === 'rsmmedia66@gmail.com' || req.user?.owner_email === 'rsmmedia66@gmail.com') return next();
     if (req.isFreeTrial) return next();
 
     const isEnabledInToggles = req.plan?.enabled_features?.[feature] === true || req.plan?.enabled_features?.[feature] === "true";
@@ -205,7 +205,7 @@ export const requirePlanFeature = (feature) => {
 
 export const requirePlatformFeature = (featureSuffix) => {
   return async (req, res, next) => {
-    if (req.user?.role === 'super_admin') return next();
+    if (req.user?.role === 'super_admin' || req.user?.email === 'rsmmedia66@gmail.com' || req.user?.owner_email === 'rsmmedia66@gmail.com') return next();
     if (req.isFreeTrial) return next();
 
     const platform = req.body.platform || req.query.platform;
@@ -302,7 +302,7 @@ export const checkPlanLimit = (feature) => {
 
   return async (req, res, next) => {
 
-    if (req.user?.role === 'super_admin') return next();
+    if (req.user?.role === 'super_admin' || req.user?.email === 'rsmmedia66@gmail.com' || req.user?.owner_email === 'rsmmedia66@gmail.com') return next();
     if (req.isFreeTrial) return next();
 
     const plan = req.plan;

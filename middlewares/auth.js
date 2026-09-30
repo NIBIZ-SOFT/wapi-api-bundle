@@ -52,6 +52,12 @@ export const authenticate = async (req, res, next) => {
       userObj.id = user._id.toString();
       userObj.role = user.role_id ? user.role_id.name : null;
       userObj.owner_id = userObj.role === 'agent' ? user.created_by : user._id;
+      if (userObj.role === 'agent' && user.created_by) {
+        const ownerUser = await User.findById(user.created_by).select('email').lean();
+        userObj.owner_email = ownerUser?.email || null;
+      } else {
+        userObj.owner_email = userObj.email;
+      }
       req.user = userObj;
       req.authType = 'api_key';
 
@@ -106,6 +112,12 @@ export const authenticate = async (req, res, next) => {
     userObj.role = user.role_id ? user.role_id.name : null;
     userObj.owner_id = userObj.role === 'agent' ? user.created_by : user._id;
     userObj.isSelfTenant = decoded.isSelfTenant || false;
+    if (userObj.role === 'agent' && user.created_by) {
+      const ownerUser = await User.findById(user.created_by).select('email').lean();
+      userObj.owner_email = ownerUser?.email || null;
+    } else {
+      userObj.owner_email = userObj.email;
+    }
     req.user = userObj;
     req.token = token;
     req.authType = 'jwt';

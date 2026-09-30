@@ -659,7 +659,7 @@ const fetchDynamicUsage = async (userId) => {
 
 export const getUserSubscription = async (req, res) => {
     try {
-        const userId = req.user._id;
+        const userId = req.user?.role === 'agent' ? (req.user.created_by || req.user.owner_id) : req.user._id;
 
         const subscription = await Subscription.findOne({
             user_id: userId,
@@ -1728,7 +1728,7 @@ export const getManagePortalUrl = async (req, res) => {
 
 export const getSubscriptionUsage = async (req, res) => {
     try {
-        const userId = req.user._id;
+        const userId = req.user?.role === 'agent' ? (req.user.created_by || req.user.owner_id) : req.user._id;
 
         const subscription = await Subscription.findOne({
             user_id: userId,
