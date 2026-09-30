@@ -40,7 +40,7 @@ jobs:
       # 3. Install Dependencies & Create archive
       # ---------------------------------------------------------
       - name: Install dependencies
-        run: npm install --omit=dev --no-audit
+        run: npm install --omit=dev --no-audit --ignore-scripts
 
       - name: Create deployment archive
         run: |
