@@ -126,7 +126,7 @@ const getUserAllowedPermissions = async (user) => {
 
 export const createTeam = async (req, res) => {
     try {
-        const { name, description, permissions, status } = req.body;
+        const { name, description, permissions, status, workspaces } = req.body;
         const userId = req.user.id;
 
         const validation = validateTeamData({ name, status });
@@ -181,12 +181,18 @@ export const createTeam = async (req, res) => {
             });
         }
 
-        const team = await Team.create({
+        const teamData = {
             user_id: userId,
             name,
             description,
             status: status || 'active'
-        });
+        };
+
+        if (workspaces && Array.isArray(workspaces)) {
+            teamData.workspaces = workspaces.filter(wsId => mongoose.Types.ObjectId.isValid(wsId));
+        }
+
+        const team = await Team.create(teamData);
 
         if (permissions && Array.isArray(permissions) && permissions.length > 0) {
             const permissionDocs = await Permission.find().lean();
@@ -329,6 +335,7 @@ export const getTeamById = async (req, res) => {
             success: true,
             data: {
                 ...team,
+                workspaces: (team.workspaces || []).map(ws => ws.toString()),
                 permissions: permissions.filter(tp => tp.permission_id).map(tp => tp.permission_id.slug)
             }
         });
@@ -393,7 +400,7 @@ export const getPermissions = async (req, res) => {
 export const updateTeam = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, description, permissions, status } = req.body;
+        const { name, description, permissions, status, workspaces } = req.body;
 
         console.log("permissions" , permissions);
         const userId = req.user.id;
@@ -459,9 +466,16 @@ export const updateTeam = async (req, res) => {
             });
         }
 
+        const updateData = { name, description, status };
+        if (workspaces !== undefined) {
+            updateData.workspaces = Array.isArray(workspaces)
+                ? workspaces.filter(wsId => mongoose.Types.ObjectId.isValid(wsId))
+                : [];
+        }
+
         const team = await Team.findOneAndUpdate(
             { _id: id, user_id: userId, deleted_at: null },
-            { name, description, status },
+            updateData,
             { returnDocument: 'after' }
         );
 
@@ -501,7 +515,11 @@ export const updateTeam = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: "Team updated successfully",
-            data: team
+            data: {
+                ...(team.toObject ? team.toObject() : team),
+                workspaces: (team.workspaces || []).map(ws => ws.toString()),
+                permissions: permissions || []
+            }
         });
     } catch (error) {
         console.error("Error updating team:", error);

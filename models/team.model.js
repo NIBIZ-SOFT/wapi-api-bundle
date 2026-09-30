@@ -26,6 +26,11 @@ const teamSchema = new mongoose.Schema(
       default: 'active'
     },
 
+    workspaces: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Workspace'
+    }],
+
     sort_order: {
       type: Number,
       default: 0,

@@ -1,4 +1,4 @@
-import { Workspace, WhatsappWaba, TelegramConnection, InstagramConnection, FacebookConnection, WhatsappPhoneNumber } from '../models/index.js';
+import { Workspace, WhatsappWaba, TelegramConnection, InstagramConnection, FacebookConnection, WhatsappPhoneNumber, Team } from '../models/index.js';
 
 export const createWorkspace = async (req, res) => {
     try {
@@ -35,10 +35,20 @@ export const createWorkspace = async (req, res) => {
 export const getWorkspaces = async (req, res) => {
     try {
         const userId = req.user.owner_id;
-        const workspaces = await Workspace.find({
+
+        const workspaceFilter = {
             user_id: userId,
             deleted_at: null
-        }).sort({ createdAt: -1 }).lean();
+        };
+
+        if (req.user?.role === 'agent' && req.user?.team_id) {
+            const team = await Team.findOne({ _id: req.user.team_id, deleted_at: null }).lean();
+            if (team && Array.isArray(team.workspaces) && team.workspaces.length > 0) {
+                workspaceFilter._id = { $in: team.workspaces };
+            }
+        }
+
+        const workspaces = await Workspace.find(workspaceFilter).sort({ createdAt: -1 }).lean();
 
 
         const [connectedWabas, telegramConns, instagramConns, facebookConns] = await Promise.all([
@@ -111,6 +121,19 @@ export const getWorkspaceById = async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.user.owner_id;
+
+        if (req.user?.role === 'agent' && req.user?.team_id) {
+            const team = await Team.findOne({ _id: req.user.team_id, deleted_at: null }).lean();
+            if (team && Array.isArray(team.workspaces) && team.workspaces.length > 0) {
+                const isAllowed = team.workspaces.some(wsId => wsId.toString() === id.toString());
+                if (!isAllowed) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Access denied: You do not have permission to access this workspace'
+                    });
+                }
+            }
+        }
 
         const workspace = await Workspace.findOne({
             _id: id,
@@ -235,7 +258,15 @@ export const getConnectedWorkspaces = async (req, res) => {
 
         const workspaceIds = connectedWabas.map(w => w.workspace_id);
         
-        const uniqueWorkspaceIds = [...new Set(workspaceIds.map(id => id.toString()))];
+        let uniqueWorkspaceIds = [...new Set(workspaceIds.map(id => id.toString()))];
+
+        if (req.user?.role === 'agent' && req.user?.team_id) {
+            const team = await Team.findOne({ _id: req.user.team_id, deleted_at: null }).lean();
+            if (team && Array.isArray(team.workspaces) && team.workspaces.length > 0) {
+                const allowedSet = new Set(team.workspaces.map(wsId => wsId.toString()));
+                uniqueWorkspaceIds = uniqueWorkspaceIds.filter(id => allowedSet.has(id));
+            }
+        }
 
         const workspaces = await Workspace.find({
             _id: { $in: uniqueWorkspaceIds },
