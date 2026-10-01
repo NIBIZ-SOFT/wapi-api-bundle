@@ -140,9 +140,14 @@ export const handleTelegramWebhook = async (req, res) => {
                             },
                             user_id: outboundMessage.user_id?.toString(),
                             contact_id: contact._id.toString(),
+                            workspace_id: (workspace_id || contact.workspace_id || bot.workspace_id)?.toString(),
                             platform: 'telegram',
                             provider: 'telegram'
                         };
+                        const targetWsId = (workspace_id || contact.workspace_id || bot.workspace_id)?.toString();
+                        if (targetWsId) {
+                            io.to(`workspace:${targetWsId}`).emit('whatsapp:message', formattedMessage);
+                        }
                         io.emit('whatsapp:message', formattedMessage);
                     }
                 } catch (e) {
@@ -236,9 +241,14 @@ export const handleTelegramWebhook = async (req, res) => {
                 },
                 user_id: newMessage.user_id?.toString(),
                 contact_id: contact._id.toString(),
+                workspace_id: (workspace_id || contact.workspace_id || bot.workspace_id)?.toString(),
                 platform: 'telegram',
                 provider: 'telegram'
             };
+            const targetWsId = (workspace_id || contact.workspace_id || bot.workspace_id)?.toString();
+            if (targetWsId) {
+                io.to(`workspace:${targetWsId}`).emit('whatsapp:message', formattedMessage);
+            }
             io.emit('whatsapp:message', formattedMessage);
         }
 

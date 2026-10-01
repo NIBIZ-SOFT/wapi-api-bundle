@@ -596,7 +596,7 @@ class UnifiedWhatsAppService {
           const templateObj = savedMessage.template_id
             ? await Template.findById(savedMessage.template_id).lean()
             : null;
-          this.io.emit('whatsapp:message', {
+          const msgPayload = {
             id: savedMessage._id.toString(),
             messageId: savedMessage._id.toString(),
             senderNumber: savedMessage.sender_number,
@@ -617,9 +617,14 @@ class UnifiedWhatsAppService {
             user_id: savedMessage.user_id?.toString(),
             whatsapp_phone_number_id: whatsappPhoneNumber ? whatsappPhoneNumber._id?.toString() : (messageParams.whatsappPhoneNumberId?.toString() || null),
             platform: savedMessage.platform || 'whatsapp',
+            workspace_id: (savedMessage.workspace_id || contact?.workspace_id || whatsappPhoneNumber?.workspace_id)?.toString(),
             template: templateObj,
             metadata: savedMessage.metadata || null
-          });
+          };
+          if (msgPayload.workspace_id) {
+            this.io.to(`workspace:${msgPayload.workspace_id}`).emit('whatsapp:message', msgPayload);
+          }
+          this.io.emit('whatsapp:message', msgPayload);
         }
       } catch (err) {
         console.error('Error emitting whatsapp:message socket event from unified service:', err);

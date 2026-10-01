@@ -657,9 +657,13 @@ export const handleFacebookInstagramIncoming = async (req, res, io = null) => {
             contact_id: contactDoc._id.toString(),
             platform: eventPlatform,
             provider: eventPlatform,
-            whatsapp_phone_number_id: wabaIdForSocket
+            whatsapp_phone_number_id: wabaIdForSocket,
+            workspace_id: (newMessage.workspace_id || workspaceId || contactDoc.workspace_id || whatsappPhoneNumber?.workspace_id)?.toString()
           };
           activeIo.emit('whatsapp:message', formattedMessage);
+          if (formattedMessage.workspace_id) {
+            activeIo.to(`workspace:${formattedMessage.workspace_id}`).emit('whatsapp:message', formattedMessage);
+          }
         }
 
         if (content && typeof content === 'string') {
@@ -1151,7 +1155,8 @@ export const handleIncomingMessage = async (req, res, io = null) => {
         submission_id: populatedMessage.submission_id?._id || populatedMessage.submission_id || null,
         fields: populatedMessage.submission_id?.fields || [],
         user_id: populatedMessage.user_id?.toString(),
-        whatsapp_phone_number_id: whatsappPhoneNumber._id?.toString()
+        whatsapp_phone_number_id: whatsappPhoneNumber._id?.toString(),
+        workspace_id: (populatedMessage.workspace_id || whatsappPhoneNumber.workspace_id || whatsappPhoneNumber.waba_id?.workspace_id)?.toString()
       };
 
       if (formattedMessage.reply_message_id) {
@@ -1801,7 +1806,8 @@ export const handleStatusUpdate = async (req, res, io = null) => {
           fields: populatedMessage.submission_id?.fields || [],
           user_id: populatedMessage.user_id?.toString(),
           contact_id: populatedMessage.contact_id?.toString(),
-          whatsapp_phone_number_id: populatedMessage.whatsapp_phone_number_id?.toString() || populatedMessage.whatsapp_connection_id?.toString()
+          whatsapp_phone_number_id: populatedMessage.whatsapp_phone_number_id?.toString() || populatedMessage.whatsapp_connection_id?.toString(),
+          workspace_id: (populatedMessage.workspace_id || updatedMessage?.workspace_id)?.toString()
         };
 
         console.log("formattedMessage", formattedMessage);

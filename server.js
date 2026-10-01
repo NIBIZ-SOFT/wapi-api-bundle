@@ -75,6 +75,25 @@ import('./services/whatsapp/unified-whatsapp.service.js').then(module => {
 
 io.on('connection', (socket) => {
   console.log('WebSocket client connected:', socket.id);
+
+  socket.on('join-room', (roomId) => {
+    if (roomId) {
+      socket.join(roomId.toString());
+    }
+  });
+
+  socket.on('join-workspace', (workspaceId) => {
+    if (workspaceId) {
+      socket.join(`workspace:${workspaceId.toString()}`);
+    }
+  });
+
+  socket.on('leave-workspace', (workspaceId) => {
+    if (workspaceId) {
+      socket.leave(`workspace:${workspaceId.toString()}`);
+    }
+  });
+
   socket.on('disconnect', () => {
  
   });

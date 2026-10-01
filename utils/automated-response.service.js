@@ -417,6 +417,7 @@ export const sendAutomatedReply = async (params) => {
                     if (io) {
                         io.emit('agent:escalation', {
                             contact_id: contactDoc._id.toString(),
+                            workspace_id: contactDoc.workspace_id?.toString() || null,
                             user_id: userId,
                             message: "AI Agent reached maximum message limit",
                             timestamp: new Date().toISOString()
@@ -455,6 +456,7 @@ export const sendAutomatedReply = async (params) => {
                         if (io) {
                             io.emit('agent:escalation', {
                                 contact_id: contactDoc._id.toString(),
+                                workspace_id: contactDoc.workspace_id?.toString() || null,
                                 user_id: userId,
                                 message: "User requested human agent via keyword",
                                 timestamp: new Date().toISOString()
@@ -518,6 +520,7 @@ export const sendAutomatedReply = async (params) => {
                     if (io) {
                         io.emit('agent:escalation', {
                             contact_id: contactDoc._id.toString(),
+                            workspace_id: contactDoc.workspace_id?.toString() || null,
                             user_id: userId,
                             message: "AI Agent requested human handoff",
                             timestamp: new Date().toISOString()

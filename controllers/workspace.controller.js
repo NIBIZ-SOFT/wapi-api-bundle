@@ -43,7 +43,7 @@ export const getWorkspaces = async (req, res) => {
 
         if (req.user?.role === 'agent' && req.user?.team_id) {
             const team = await Team.findOne({ _id: req.user.team_id, deleted_at: null }).lean();
-            if (team && Array.isArray(team.workspaces) && team.workspaces.length > 0) {
+            if (team && Array.isArray(team.workspaces)) {
                 workspaceFilter._id = { $in: team.workspaces };
             }
         }
@@ -262,7 +262,7 @@ export const getConnectedWorkspaces = async (req, res) => {
 
         if (req.user?.role === 'agent' && req.user?.team_id) {
             const team = await Team.findOne({ _id: req.user.team_id, deleted_at: null }).lean();
-            if (team && Array.isArray(team.workspaces) && team.workspaces.length > 0) {
+            if (team && Array.isArray(team.workspaces)) {
                 const allowedSet = new Set(team.workspaces.map(wsId => wsId.toString()));
                 uniqueWorkspaceIds = uniqueWorkspaceIds.filter(id => allowedSet.has(id));
             }

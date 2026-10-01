@@ -629,7 +629,8 @@ export default class BaileysProvider extends BaseProvider {
                             name: populatedMessage.recipient_number
                         },
                         user_id: populatedMessage.user_id?.toString(),
-                        whatsapp_phone_number_id: phone?._id?.toString()
+                        whatsapp_phone_number_id: phone?._id?.toString(),
+                        workspace_id: (contact?.workspace_id || phone?.workspace_id)?.toString()
                     };
 
                     if (formattedMessage.reply_message_id) {
@@ -653,6 +654,10 @@ export default class BaileysProvider extends BaseProvider {
                         }
                     }
 
+                    const targetWsId = formattedMessage.workspace_id;
+                    if (targetWsId) {
+                        this.io.to(`workspace:${targetWsId}`).emit('whatsapp:message', formattedMessage);
+                    }
                     this.io.emit('whatsapp:message', formattedMessage);
                 } catch (socketError) {
                     console.error('Error emitting socket message for Baileys:', socketError);

@@ -668,9 +668,14 @@ export const sendMessage = async (req, res) => {
           },
           user_id: newMessage.user_id?.toString(),
           contact_id: contact._id.toString(),
+          workspace_id: (newMessage.workspace_id || contact.workspace_id || connection?.workspace_id)?.toString(),
           platform: platform,
           provider: platform
         };
+        const targetWsId = formattedMessage.workspace_id;
+        if (targetWsId) {
+          io.to(`workspace:${targetWsId}`).emit('whatsapp:message', formattedMessage);
+        }
         io.emit('whatsapp:message', formattedMessage);
       }
 
@@ -1136,9 +1141,14 @@ export const sendMessage = async (req, res) => {
               },
               user_id: newMessage.user_id?.toString(),
               contact_id: contactDoc._id.toString(),
+              workspace_id: (newMessage.workspace_id || contactDoc.workspace_id || connection?.workspace_id)?.toString(),
               platform: platform,
               provider: platform
             };
+            const targetWsId = formattedMessage.workspace_id;
+            if (targetWsId) {
+              io.to(`workspace:${targetWsId}`).emit('whatsapp:message', formattedMessage);
+            }
             io.emit('whatsapp:message', formattedMessage);
           }
         }
