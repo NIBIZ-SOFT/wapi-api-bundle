@@ -1033,7 +1033,8 @@ export default class BusinessAPIProvider extends BaseProvider {
       throw new Error('WhatsApp Business API connection not found');
     }
 
-    const myPhoneNumber = connection.display_phone_number || connection.display_phone_number;
+    const myPhoneNumber = connection.display_phone_number || connection.registred_phone_number || connection.phone_number;
+    const phoneId = connection._id || connection.id;
 
     const contact = await Contact.findOne({
       created_by: userId,
@@ -1052,18 +1053,27 @@ export default class BusinessAPIProvider extends BaseProvider {
       if (contact.whatsapp_bsuid) identifiers.push(contact.whatsapp_bsuid);
     }
 
+    const connectionCondition = [];
+    if (myPhoneNumber) {
+      connectionCondition.push({ sender_number: myPhoneNumber }, { recipient_number: myPhoneNumber });
+    }
+    if (phoneId && mongoose.Types.ObjectId.isValid(phoneId)) {
+      connectionCondition.push({ whatsapp_phone_number_id: new mongoose.Types.ObjectId(phoneId) });
+    }
+
+    const contactCondition = [
+      { sender_number: { $in: identifiers } },
+      { recipient_number: { $in: identifiers } }
+    ];
+    if (contact) {
+      contactCondition.push({ contact_id: contact._id });
+    }
+
     const baseCondition = {
       deleted_at: null,
-      $or: [
-        ...(contact ? [{ contact_id: contact._id }] : []),
-        {
-          sender_number: { $in: identifiers },
-          recipient_number: myPhoneNumber
-        },
-        {
-          sender_number: myPhoneNumber,
-          recipient_number: { $in: identifiers }
-        }
+      $and: [
+        { $or: contactCondition },
+        ...(connectionCondition.length > 0 ? [{ $or: connectionCondition }] : [])
       ]
     };
 
@@ -1098,14 +1108,18 @@ export default class BusinessAPIProvider extends BaseProvider {
 
     let canChat = true;
     if (contact) {
-      const lastInboundMessage = await Message.findOne({
+      const inboundCondition = {
         deleted_at: null,
         direction: 'inbound',
         $or: [
           { contact_id: contact._id },
           { sender_number: { $in: identifiers } }
         ]
-      })
+      };
+      if (connectionCondition.length > 0) {
+        inboundCondition.$and = [{ $or: connectionCondition }];
+      }
+      const lastInboundMessage = await Message.findOne(inboundCondition)
         .sort({ wa_timestamp: -1 })
         .lean();
 
@@ -1186,7 +1200,7 @@ export default class BusinessAPIProvider extends BaseProvider {
       throw new Error('WhatsApp Business API connection not found');
     }
 
-    const myPhoneNumber = connection.registred_phone_number;
+    const myPhoneNumber = connection.registred_phone_number || connection.display_phone_number || connection.phone_number;
     const page = options.page || 1;
     const limit = options.limit || 15;
     const skip = (page - 1) * limit;
