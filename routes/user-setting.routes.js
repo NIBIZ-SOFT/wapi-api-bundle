@@ -7,7 +7,7 @@ import { uploader } from '../utils/upload.js';
 
 const router = express.Router();
 
-router.get('/', authenticate, checkPermission('view.user_settings'), getUserSettings);
+router.get('/', authenticate, getUserSettings);
 
 router.put('/', authenticate, checkPermission('update.user_settings'), uploader('attachments').fields([{ name: 'bg_image', maxCount: 1 }]), updateUserSettings);
 

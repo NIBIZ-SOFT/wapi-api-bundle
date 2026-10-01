@@ -157,7 +157,8 @@ export const getAllAgents = async (req, res) => {
         };
 
         if (req.user.role !== 'super_admin') {
-            baseQuery.created_by = req.user._id;
+            const ownerId = req.user.role === 'agent' ? req.user.created_by : req.user._id;
+            baseQuery.created_by = ownerId;
         }
 
         const searchQuery = buildSearchQuery(searchTerm);

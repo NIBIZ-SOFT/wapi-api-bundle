@@ -13,7 +13,8 @@ router.get('/funnels', checkPermission('view.kanban_funnel'), agentController.ge
 router.post('/funnel/action', checkPermission('update.agents'), agentController.handleAgentKanbanAction);
 router.get('/:id/funnel-status', checkPermission('view.agents'), agentController.getAgentKanbanStatus);
 
-router.get('/all', checkPermission('view.agents'), agentController.getAllAgents);
+router.get('/', checkPermission(['view.agents', 'manage.conversations']), agentController.getAllAgents);
+router.get('/all', checkPermission(['view.agents', 'manage.conversations']), agentController.getAllAgents);
 router.post('/create', checkPlanLimit('staff'), checkPermission('create.agents'), agentController.createAgent);
 router.put('/:id/update', checkPermission('update.agents'), agentController.updateAgent);
 router.put('/:id/update/status', checkPermission('update.agents'), agentController.updateAgentStatus);

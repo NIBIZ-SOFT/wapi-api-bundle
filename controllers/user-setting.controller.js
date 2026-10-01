@@ -109,11 +109,23 @@ export const getUserSettings = async (req, res) => {
       });
     }
 
-    let userSettings = await UserSetting.findOne({ user_id: userId });
+    let effectiveUserId = userId;
+    if (req.user?.role === 'agent') {
+      const agent = await User.findById(userId).select('created_by').lean();
+      if (agent?.created_by) {
+        effectiveUserId = agent.created_by;
+      }
+    }
+
+    let userSettings = await UserSetting.findOne({ user_id: effectiveUserId });
+
+    if (!userSettings) {
+      userSettings = await UserSetting.findOne({ user_id: userId });
+    }
 
     if (!userSettings) {
       userSettings = await UserSetting.create({
-        user_id: userId,
+        user_id: effectiveUserId,
         ai_model: null,
         api_key: null
       });
