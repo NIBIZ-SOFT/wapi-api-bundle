@@ -1,4 +1,4 @@
-import { AutomationFlow, AutomationExecution, Contact, EcommerceOrder, Message, WhatsappPhoneNumber, Template, Tag, ContactTag, ChatAssignment, Chatbot, ReplyMaterial, EcommerceProduct } from '../models/index.js';
+import { AutomationFlow, AutomationExecution, Contact, EcommerceOrder, Message, WhatsappPhoneNumber, WhatsappWaba, WhatsappConnection, Template, Tag, ContactTag, ChatAssignment, Chatbot, ReplyMaterial, EcommerceProduct } from '../models/index.js';
 import unifiedWhatsAppService from '../services/whatsapp/unified-whatsapp.service.js';
 import BusinessAPIProvider from '../services/whatsapp/providers/business-api.provider.js';
 
@@ -265,43 +265,163 @@ class AutomationEngine {
 
       let isFirstMessage = false;
       try {
+        let targetWorkspaceId = eventData.workspaceId ? eventData.workspaceId.toString() : null;
+        if (!targetWorkspaceId && eventData.whatsappPhoneNumberId) {
+          try {
+            const phoneDoc = await WhatsappPhoneNumber.findById(eventData.whatsappPhoneNumberId).populate('waba_id').lean();
+            if (phoneDoc?.waba_id?.workspace_id) {
+              targetWorkspaceId = phoneDoc.waba_id.workspace_id.toString();
+            }
+          } catch (e) {}
+        }
+        if (!targetWorkspaceId && contact?.workspace_id) {
+          targetWorkspaceId = contact.workspace_id.toString();
+        }
+
+        const customerVariants = new Set();
+        if (senderNumber) {
+          const raw = String(senderNumber).trim();
+          customerVariants.add(raw);
+          const digits = raw.replace(/\D/g, '');
+          if (digits) {
+            customerVariants.add(digits);
+            customerVariants.add(`+${digits}`);
+            if (digits.startsWith('880') && digits.length >= 13) {
+              const local = digits.slice(3);
+              customerVariants.add(local);
+              customerVariants.add(`0${local}`);
+            } else if (digits.startsWith('0') && digits.length === 11) {
+              const intl = `880${digits.slice(1)}`;
+              customerVariants.add(intl);
+              customerVariants.add(`+${intl}`);
+              customerVariants.add(digits.slice(1));
+            }
+          }
+        }
+        const customerPhoneList = Array.from(customerVariants);
+
+        let workspacePhoneIds = [];
+        let workspaceConnIds = [];
+        const workspaceNumberStrings = new Set();
+        let workspaceContactIds = [];
+
+        if (eventData.recipientNumber) {
+          const rRaw = String(eventData.recipientNumber).trim();
+          workspaceNumberStrings.add(rRaw);
+          const rDigits = rRaw.replace(/\D/g, '');
+          if (rDigits) {
+            workspaceNumberStrings.add(rDigits);
+            workspaceNumberStrings.add(`+${rDigits}`);
+          }
+        }
+
+        if (eventData.whatsappPhoneNumberId) {
+          workspacePhoneIds.push(eventData.whatsappPhoneNumberId);
+        }
+
+        if (targetWorkspaceId) {
+          const workspaceWabas = await WhatsappWaba.find({ workspace_id: targetWorkspaceId }).select('_id').lean();
+          const wabaIds = workspaceWabas.map(w => w._id);
+
+          const workspacePhones = await WhatsappPhoneNumber.find({
+            $or: [
+              { waba_id: { $in: wabaIds } },
+              ...(eventData.whatsappPhoneNumberId ? [{ _id: eventData.whatsappPhoneNumberId }] : [])
+            ]
+          }).select('_id display_phone_number phone_number').lean();
+
+          const workspaceConnections = await WhatsappConnection.find({
+            $or: [
+              { workspace_id: targetWorkspaceId },
+              ...(wabaIds.length > 0 ? [{ waba_id: { $in: wabaIds } }] : [])
+            ]
+          }).select('_id phone_number').lean();
+
+          for (const p of workspacePhones) {
+            workspacePhoneIds.push(p._id);
+            if (p.display_phone_number) {
+              const str = p.display_phone_number.trim();
+              workspaceNumberStrings.add(str);
+              const d = str.replace(/\D/g, '');
+              if (d) { workspaceNumberStrings.add(d); workspaceNumberStrings.add(`+${d}`); }
+            }
+            if (p.phone_number) {
+              const str = p.phone_number.trim();
+              workspaceNumberStrings.add(str);
+              const d = str.replace(/\D/g, '');
+              if (d) { workspaceNumberStrings.add(d); workspaceNumberStrings.add(`+${d}`); }
+            }
+          }
+
+          for (const c of workspaceConnections) {
+            workspaceConnIds.push(c._id);
+            if (c.phone_number) {
+              const str = c.phone_number.trim();
+              workspaceNumberStrings.add(str);
+              const d = str.replace(/\D/g, '');
+              if (d) { workspaceNumberStrings.add(d); workspaceNumberStrings.add(`+${d}`); }
+            }
+          }
+
+          const workspaceContacts = await Contact.find({
+            workspace_id: targetWorkspaceId,
+            $or: [
+              { phone_number: { $in: customerPhoneList } },
+              ...(contact?._id ? [{ _id: contact._id }] : [])
+            ],
+            deleted_at: null
+          }).select('_id').lean();
+
+          workspaceContactIds = workspaceContacts.map(c => c._id);
+        }
+
+        if (contact?._id && !workspaceContactIds.some(id => String(id) === String(contact._id))) {
+          workspaceContactIds.push(contact._id);
+        }
+
         const priorQuery = {
           deleted_at: null,
           $or: [
-            ...(contact?._id ? [{ contact_id: contact._id }] : []),
-            ...(senderNumber ? [
-              { sender_number: senderNumber },
-              { recipient_number: senderNumber }
-            ] : [])
+            ...(workspaceContactIds.length > 0 ? [{ contact_id: { $in: workspaceContactIds } }] : []),
+            {
+              $and: [
+                {
+                  $or: [
+                    { sender_number: { $in: customerPhoneList } },
+                    { recipient_number: { $in: customerPhoneList } }
+                  ]
+                },
+                {
+                  $or: [
+                    ...(workspacePhoneIds.length > 0 ? [{ whatsapp_phone_number_id: { $in: workspacePhoneIds } }] : []),
+                    ...(workspaceConnIds.length > 0 ? [{ whatsapp_connection_id: { $in: workspaceConnIds } }] : []),
+                    ...(workspaceNumberStrings.size > 0 ? [
+                      { sender_number: { $in: Array.from(workspaceNumberStrings) } },
+                      { recipient_number: { $in: Array.from(workspaceNumberStrings) } }
+                    ] : []),
+                    ...(targetWorkspaceId ? [{ workspace_id: targetWorkspaceId }] : []),
+                    ...(!targetWorkspaceId && userId ? [{ user_id: userId }] : [])
+                  ]
+                }
+              ]
+            }
           ]
         };
 
-        if (eventData.whatsappPhoneNumberId) {
-          priorQuery.$and = [
-            {
-              $or: [
-                { whatsapp_phone_number_id: eventData.whatsappPhoneNumberId },
-                ...(eventData.recipientNumber ? [
-                  { sender_number: eventData.recipientNumber },
-                  { recipient_number: eventData.recipientNumber }
-                ] : [])
-              ]
-            }
-          ];
-        } else if (userId) {
-          priorQuery.user_id = userId;
-        }
-
         if (eventData.waMessageId) {
           priorQuery.wa_message_id = { $ne: eventData.waMessageId };
-          const priorMessage = await Message.findOne(priorQuery).select('_id').lean();
-          isFirstMessage = !priorMessage;
-        } else {
-          const totalMessages = await Message.countDocuments(priorQuery);
-          isFirstMessage = totalMessages <= 1;
         }
 
-        console.log(`[Automation Engine] First Message Check: sender=${senderNumber}, waMessageId=${eventData.waMessageId} => is_first_message=${isFirstMessage}`);
+        const priorMessage = await Message.findOne(priorQuery)
+          .sort({ created_at: -1 })
+          .select('_id created_at direction sender_number recipient_number content')
+          .lean();
+
+        isFirstMessage = !priorMessage;
+        console.log(`[Automation Engine] First Message Check: workspace=${targetWorkspaceId}, sender=${senderNumber}, waMessageId=${eventData.waMessageId} => priorMessageFound=${!!priorMessage}, is_first_message=${isFirstMessage}`);
+        if (priorMessage) {
+          console.log(`[Automation Engine] Prior message details: id=${priorMessage._id}, direction=${priorMessage.direction}, time=${priorMessage.created_at}`);
+        }
       } catch (firstMsgErr) {
         console.warn('Failed to check is_first_message:', firstMsgErr.message);
       }

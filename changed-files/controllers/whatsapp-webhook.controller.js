@@ -933,6 +933,7 @@ export const handleIncomingMessage = async (req, res, io = null) => {
         source: 'whatsapp',
         user_id: whatsappPhoneNumber.user_id,
         created_by: whatsappPhoneNumber.user_id,
+        workspace_id: whatsappPhoneNumber.waba_id?.workspace_id || null,
         status: 'lead',
         deleted_at: null
       };
@@ -951,6 +952,10 @@ export const handleIncomingMessage = async (req, res, io = null) => {
       contactDoc = await Contact.create(contactFields);
     } else {
       let needsSave = false;
+      if (!contactDoc.workspace_id && whatsappPhoneNumber.waba_id?.workspace_id) {
+        contactDoc.workspace_id = whatsappPhoneNumber.waba_id.workspace_id;
+        needsSave = true;
+      }
       if (waUsername && contactDoc.whatsapp_username !== waUsername) {
         contactDoc.whatsapp_username = waUsername;
         needsSave = true;
@@ -990,6 +995,7 @@ export const handleIncomingMessage = async (req, res, io = null) => {
       metadata: message,
       user_id: whatsappPhoneNumber.user_id,
       contact_id: contactDoc._id,
+      whatsapp_phone_number_id: whatsappPhoneNumber._id,
       interactive_data: interactiveData,
       provider: 'business_api',
       reply_message_id: replyMessageId,
