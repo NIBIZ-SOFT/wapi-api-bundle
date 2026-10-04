@@ -263,6 +263,26 @@ class AutomationEngine {
         console.warn('Failed to load contact for message_received:', contactErr.message);
       }
 
+      let isFirstMessage = false;
+      try {
+        if (contact?._id) {
+          const inboundCount = await Message.countDocuments({
+            contact_id: contact._id,
+            $or: [
+              { direction: 'inbound' },
+              { from_me: false }
+            ]
+          });
+          const isNewContact = contact.created_at && (Date.now() - new Date(contact.created_at).getTime() < 30000);
+          isFirstMessage = inboundCount <= 1 || isNewContact;
+        } else {
+          isFirstMessage = true;
+        }
+      } catch (firstMsgErr) {
+        console.warn('Failed to check is_first_message:', firstMsgErr.message);
+      }
+      eventData.is_first_message = isFirstMessage;
+
       const triggers = await automationCache.getUserActiveFlows(userId);
       console.log(`Found ${triggers.length} triggers for user ${userId}`);
 
@@ -362,6 +382,7 @@ class AutomationEngine {
           contactId: eventData.contactId || contact?._id?.toString() || null,
           contact,
           whatsappPhoneNumberId: eventData.whatsappPhoneNumberId,
+          is_first_message: isFirstMessage,
           timestamp: new Date()
         });
       }
@@ -384,7 +405,8 @@ class AutomationEngine {
       recipientNumber,
       messageType,
       eventType: "messageReceived",
-      event_type: "message_received"
+      event_type: "message_received",
+      is_first_message: eventData?.is_first_message !== undefined ? eventData.is_first_message : false
     };
 
     if (eventData && eventData.whatsappPhoneNumberId) {
@@ -403,11 +425,20 @@ class AutomationEngine {
       else if (conditions.operator === 'starts_with') weight = 2;
       else if (conditions.operator === 'contains_any') weight = 3;
 
+      if (conditions.field === 'is_first_message') {
+        weight = 1;
+      }
+
       if (Object.keys(conditions).length === 0 || (conditions.field === 'event_type' && conditions.value === 'message_received')) {
         const triggerNode = flow.nodes?.find(n => n.type === 'trigger');
         if (triggerNode) {
           const triggerType = triggerNode.parameters?.triggerType;
-          if (triggerType && triggerType !== 'any message') {
+          if (triggerType === 'first message') {
+            if (!eventData?.is_first_message) {
+              console.log(`Flow ${flow.name} triggerType is first message but conditions are empty and event is not first message. Skipping.`);
+              continue;
+            }
+          } else if (triggerType && triggerType !== 'any message') {
             console.log(`Flow ${flow.name} triggerType is ${triggerType} but conditions are empty. Skipping.`);
             continue;
           }
@@ -571,6 +602,8 @@ class AutomationEngine {
             condObj = { field: 'event_type', operator: 'equals', value: 'order_received' };
           } else if (triggerType === 'any message') {
             condObj = { field: 'event_type', operator: 'equals', value: 'message_received' };
+          } else if (triggerType === 'first message') {
+            condObj = { field: 'is_first_message', operator: 'equals', value: true };
           } else {
             const operatorMap = {
               "contains keyword": "contains_any",
@@ -591,7 +624,8 @@ class AutomationEngine {
             recipientNumber: inputData.recipientNumber,
             messageType: inputData.messageType,
             eventType: inputData.event_type || 'message_received',
-            event_type: inputData.event_type || 'message_received'
+            event_type: inputData.event_type || 'message_received',
+            is_first_message: inputData.is_first_message !== undefined ? inputData.is_first_message : false
           };
 
           let matched = this.evaluateCondition(condObj, dataObject);
