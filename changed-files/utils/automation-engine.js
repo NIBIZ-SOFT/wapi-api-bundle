@@ -265,19 +265,43 @@ class AutomationEngine {
 
       let isFirstMessage = false;
       try {
-        if (contact?._id) {
-          const inboundCount = await Message.countDocuments({
-            contact_id: contact._id,
-            $or: [
-              { direction: 'inbound' },
-              { from_me: false }
-            ]
-          });
-          const isNewContact = contact.created_at && (Date.now() - new Date(contact.created_at).getTime() < 30000);
-          isFirstMessage = inboundCount <= 1 || isNewContact;
-        } else {
-          isFirstMessage = true;
+        const priorQuery = {
+          deleted_at: null,
+          $or: [
+            ...(contact?._id ? [{ contact_id: contact._id }] : []),
+            ...(senderNumber ? [
+              { sender_number: senderNumber },
+              { recipient_number: senderNumber }
+            ] : [])
+          ]
+        };
+
+        if (eventData.whatsappPhoneNumberId) {
+          priorQuery.$and = [
+            {
+              $or: [
+                { whatsapp_phone_number_id: eventData.whatsappPhoneNumberId },
+                ...(eventData.recipientNumber ? [
+                  { sender_number: eventData.recipientNumber },
+                  { recipient_number: eventData.recipientNumber }
+                ] : [])
+              ]
+            }
+          ];
+        } else if (userId) {
+          priorQuery.user_id = userId;
         }
+
+        if (eventData.waMessageId) {
+          priorQuery.wa_message_id = { $ne: eventData.waMessageId };
+          const priorMessage = await Message.findOne(priorQuery).select('_id').lean();
+          isFirstMessage = !priorMessage;
+        } else {
+          const totalMessages = await Message.countDocuments(priorQuery);
+          isFirstMessage = totalMessages <= 1;
+        }
+
+        console.log(`[Automation Engine] First Message Check: sender=${senderNumber}, waMessageId=${eventData.waMessageId} => is_first_message=${isFirstMessage}`);
       } catch (firstMsgErr) {
         console.warn('Failed to check is_first_message:', firstMsgErr.message);
       }
