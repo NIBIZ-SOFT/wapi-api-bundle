@@ -1137,6 +1137,8 @@ export const handleIncomingMessage = async (req, res, io = null) => {
         messageType: populatedMessage.message_type,
         fileUrl: populatedMessage.file_url || null,
         template: populatedMessage.template_id || null,
+        metadata: populatedMessage.metadata || null,
+        referral: populatedMessage.metadata?.referral || null,
         createdAt: populatedMessage.wa_timestamp,
         can_chat: true,
         delivered_at: populatedMessage.delivered_at || null,

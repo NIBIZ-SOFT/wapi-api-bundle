@@ -176,6 +176,7 @@ const groupMessagesByDateAndSender = (messages, replyMessagesMap = {}, reactions
       fileUrl: message.file_url || null,
       template: message.template_id || null,
       metadata: message.metadata || null,
+      referral: message.metadata?.referral || null,
       createdAt: message.wa_timestamp,
       can_chat: message.can_chat,
       delivered_at: message.delivered_at || null,
