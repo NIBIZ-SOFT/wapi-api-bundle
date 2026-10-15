@@ -194,18 +194,41 @@ class FacebookProvider {
     }
 
     async subscribePageToWebhook(pageId, pageAccessToken) {
+        const fullFields = 'leadgen,messages,messaging_postbacks,message_reactions,feed';
+        const fallbacks = [
+            'leadgen,messages,messaging_postbacks,feed',
+            'leadgen,feed',
+            'feed'
+        ];
+
         try {
             const url = `https://graph.facebook.com/${FB_API_VERSION}/${pageId}/subscribed_apps`;
             const response = await axios.post(url, null, {
                 params: {
-                    subscribed_fields: 'leadgen,messages,messaging_postbacks,message_reactions,feed',
+                    subscribed_fields: fullFields,
                     access_token: pageAccessToken
                 }
             });
             return response.data;
         } catch (error) {
-             console.error('[FacebookProvider] Error subscribing page:', JSON.stringify(error?.response?.data || {}, null, 2) || error.message);
-             throw error;
+            console.warn(`[FacebookProvider] Full subscription for page ${pageId} failed: ${error?.response?.data?.error?.message || error.message}. Trying fallback fields...`);
+            for (const fields of fallbacks) {
+                try {
+                    const url = `https://graph.facebook.com/${FB_API_VERSION}/${pageId}/subscribed_apps`;
+                    const res = await axios.post(url, null, {
+                        params: {
+                            subscribed_fields: fields,
+                            access_token: pageAccessToken
+                        }
+                    });
+                    console.log(`[FacebookProvider] Subscribed page ${pageId} successfully with fallback fields: ${fields}`);
+                    return res.data;
+                } catch (fbErr) {
+                    console.warn(`[FacebookProvider] Fallback with fields "${fields}" failed:`, fbErr?.response?.data?.error?.message || fbErr.message);
+                }
+            }
+            console.error('[FacebookProvider] Error subscribing page:', JSON.stringify(error?.response?.data || {}, null, 2) || error.message);
+            throw error;
         }
     }
     async unsubscribePageToWebhook(pageId, pageAccessToken) {
