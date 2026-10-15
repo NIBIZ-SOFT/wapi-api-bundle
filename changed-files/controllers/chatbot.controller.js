@@ -276,32 +276,79 @@ export const scrapeUrl = async (req, res) => {
             return res.status(400).json({ success: false, message: 'URL is required' });
         }
 
-        const browser = await puppeteer.launch({
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
-        
-        const page = await browser.newPage();
-        
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        
+        let text = '';
+
+        // 1. Try Puppeteer first if available
         try {
-            await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-        } catch (navError) {
-            console.error('Puppeteer navigation error:', navError);
+            const fs = await import('fs');
+            let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+            if (!executablePath) {
+                if (fs.existsSync('/usr/bin/chromium-browser')) executablePath = '/usr/bin/chromium-browser';
+                else if (fs.existsSync('/usr/bin/chromium')) executablePath = '/usr/bin/chromium';
+                else if (fs.existsSync('/usr/bin/google-chrome')) executablePath = '/usr/bin/google-chrome';
+            }
+
+            const launchOptions = {
+                headless: 'new',
+                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            };
+            if (executablePath) {
+                launchOptions.executablePath = executablePath;
+            }
+
+            const browser = await puppeteer.launch(launchOptions);
+            const page = await browser.newPage();
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            
+            try {
+                await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
+            } catch (navError) {
+                console.warn('Puppeteer navigation warning:', navError.message);
+            }
+
+            text = await page.evaluate(() => {
+                const elementsToRemove = document.querySelectorAll('nav, header, footer, script, style, noscript, iframe, svg');
+                elementsToRemove.forEach(el => el.remove());
+                return document.body ? document.body.innerText : '';
+            });
+
+            await browser.close();
+        } catch (puppeteerError) {
+            console.warn('[ScrapeUrl] Puppeteer failed, falling back to direct HTTP fetch:', puppeteerError.message);
         }
 
-        let text = await page.evaluate(() => {
-            const elementsToRemove = document.querySelectorAll('nav, header, footer, script, style, noscript, iframe');
-            elementsToRemove.forEach(el => el.remove());
-            
-            return document.body ? document.body.innerText : '';
-        });
-        
-        await browser.close();
+        // 2. Fallback to axios if puppeteer failed or returned empty text
+        if (!text || text.trim().length === 0) {
+            try {
+                const axios = (await import('axios')).default;
+                const response = await axios.get(url, {
+                    timeout: 15000,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                    }
+                });
 
-        if (!text) {
-             return res.status(400).json({ success: false, message: 'Could not extract text from the provided URL. The page might be empty or blocking scrapers.' });
+                if (response.data && typeof response.data === 'string') {
+                    let html = response.data;
+                    html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ');
+                    html = html.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ');
+                    html = html.replace(/<nav\b[^<]*(?:(?!<\/nav>)<[^<]*)*<\/nav>/gi, ' ');
+                    html = html.replace(/<header\b[^<]*(?:(?!<\/header>)<[^<]*)*<\/header>/gi, ' ');
+                    html = html.replace(/<footer\b[^<]*(?:(?!<\/footer>)<[^<]*)*<\/footer>/gi, ' ');
+                    html = html.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, ' ');
+                    html = html.replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, ' ');
+                    html = html.replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, ' ');
+                    text = html.replace(/<[^>]+>/g, ' ');
+                    text = text.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+                }
+            } catch (httpError) {
+                console.error('[ScrapeUrl] HTTP fallback also failed:', httpError.message);
+            }
+        }
+
+        if (!text || text.trim().length === 0) {
+            return res.status(400).json({ success: false, message: 'Could not extract text from the provided URL. The page might be empty or blocking scrapers.' });
         }
 
         text = text.replace(/\s+/g, ' ').trim();
