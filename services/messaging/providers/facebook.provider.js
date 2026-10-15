@@ -21,7 +21,26 @@ class FacebookProvider {
             const response = await axios.post(url, payload);
             return response.data;
         } catch (error) {
-            console.error('[FacebookProvider] Error sending message:', JSON.stringify(error?.response?.data || {}, null, 2) || error.message);
+            const fbErr = error?.response?.data?.error;
+            console.error('[FacebookProvider] Error sending message:', JSON.stringify(fbErr || {}, null, 2) || error.message);
+            
+            // If private reply or DM fails because of missing pages_messaging permission or recipient restriction,
+            // fall back to replying directly to the comment if a comment ID is present.
+            if (options.reply_to_comment_id && (fbErr?.code === 230 || fbErr?.code === 10 || fbErr?.message?.includes('pages_messaging'))) {
+                console.log(`[FacebookProvider] Falling back to public comment reply on Facebook comment ${options.reply_to_comment_id}`);
+                const commentUrl = `https://graph.facebook.com/${FB_API_VERSION}/${options.reply_to_comment_id}/comments`;
+                const commentRes = await axios.post(commentUrl, null, {
+                    params: {
+                        message: text,
+                        access_token: pageAccessToken
+                    }
+                });
+                return {
+                    message_id: commentRes.data?.id || `comment_reply_${Date.now()}`,
+                    recipient_id: recipientId,
+                    is_comment_reply: true
+                };
+            }
             throw error;
         }
     }
@@ -56,7 +75,24 @@ class FacebookProvider {
             const response = await axios.post(url, payload);
             return response.data;
         } catch (error) {
-            console.error(`[FacebookProvider] Error sending ${messageType}:`, JSON.stringify(error?.response?.data || {}, null, 2) || error.message);
+            const fbErr = error?.response?.data?.error;
+            console.error(`[FacebookProvider] Error sending ${messageType}:`, JSON.stringify(fbErr || {}, null, 2) || error.message);
+            
+            if (options.reply_to_comment_id && (fbErr?.code === 230 || fbErr?.code === 10 || fbErr?.message?.includes('pages_messaging'))) {
+                console.log(`[FacebookProvider] Falling back to public comment reply with media on Facebook comment ${options.reply_to_comment_id}`);
+                const commentUrl = `https://graph.facebook.com/${FB_API_VERSION}/${options.reply_to_comment_id}/comments`;
+                const commentRes = await axios.post(commentUrl, null, {
+                    params: {
+                        attachment_url: fileUrl,
+                        access_token: pageAccessToken
+                    }
+                });
+                return {
+                    message_id: commentRes.data?.id || `comment_reply_${Date.now()}`,
+                    recipient_id: recipientId,
+                    is_comment_reply: true
+                };
+            }
             throw error;
         }
     }

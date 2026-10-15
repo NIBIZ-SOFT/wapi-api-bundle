@@ -922,6 +922,18 @@ export const sendMessage = async (req, res) => {
               reply_to_comment_id = lastMsg.platform_message_id.replace('comment_', '');
             }
           }
+          if (!reply_to_comment_id) {
+            const lastComment = await Message.findOne({
+              contact_id: contactDoc._id,
+              platform_message_id: { $regex: '^comment_' }
+            }).sort({ wa_timestamp: -1 }).lean();
+            if (lastComment && lastComment.platform_message_id) {
+              reply_to_comment_id = lastComment.platform_message_id.replace('comment_', '');
+              if (!pageId) {
+                pageId = lastComment.direction === 'inbound' ? lastComment.recipient_id : lastComment.sender_id;
+              }
+            }
+          }
 
           if (platform === 'facebook') {
             if (!pageId) {
