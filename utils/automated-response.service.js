@@ -386,24 +386,62 @@ export const placeEcommerceOrder = async (ecommerceConfig, { name, phone, addres
     }
 };
 
+export const extractSearchQueries = (text) => {
+    if (!text || typeof text !== 'string') return [];
+    const queries = [];
+
+    // Check quotes first (e.g. “Bangla Vibes” or "Product Name")
+    const quoteMatches = text.match(/["“'‘]([^"”'’]+)["”'’]/g);
+    if (quoteMatches) {
+        quoteMatches.forEach(m => {
+            const clean = m.replace(/["“”'’]/g, '').trim();
+            if (clean.length > 2) queries.push(clean);
+        });
+    }
+
+    const cleanText = text
+        .replace(/\b(hi|hello|salam|assalamu\s+alaikum|kemon\s+achen|bhai|apnader|kache|ki|er|price|dam|koto|ache|ase|dekte|dekhan|chai|order|korbo|amar|lagbe|eta|eita|aita|please|details|bolun|janan|nibo|nibi|size|color|yellow|black|white|red|blue|xl|xxl|m|l|s)\b/gi, ' ')
+        .replace(/[?.,!/\\#"“”'’`~@$%^&*()+=[\]{}|;:<>-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (cleanText.length > 2) {
+        queries.push(cleanText);
+    }
+
+    const words = cleanText.split(' ').filter(w => w.length > 1);
+    if (words.length >= 2) {
+        queries.push(words.slice(0, 2).join(' '));
+    }
+    if (words.length >= 3) {
+        queries.push(words.slice(0, 3).join(' '));
+    }
+    if (words.length >= 4) {
+        queries.push(words.slice(0, 4).join(' '));
+    }
+
+    return [...new Set(queries.filter(q => q && q.length > 1))];
+};
+
 export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, recentHistoryText = '') => {
     if (!ecommerceConfig || !ecommerceConfig.enabled || !incomingText || typeof incomingText !== 'string') return '';
-    const combinedText = `${recentHistoryText} \n ${incomingText}`;
     const contextParts = [];
 
     const base = (ecommerceConfig.api_base_url || '').replace(/\/$/, '');
     const storeDomain = ecommerceConfig.store_url ? ecommerceConfig.store_url.replace(/^https?:\/\//i, '').replace(/\/.*$/, '') : '';
 
-    // 1. Direct product link or slug in incoming text or recent conversation
+    // 1. Check for a direct product link or slug in incoming text first, then recent conversation
     let slug = null;
-    if (storeDomain) {
-        const domainRegex = new RegExp(`${storeDomain.replace('.', '\\.')}\\/products\\/([a-zA-Z0-9_-]+)`, 'i');
-        const match = combinedText.match(domainRegex);
-        if (match && match[1]) slug = match[1];
-    }
-    if (!slug) {
-        const genericMatch = combinedText.match(/\/products\/([a-zA-Z0-9_-]+)/i);
-        if (genericMatch && genericMatch[1]) slug = genericMatch[1];
+    const linkRegex = new RegExp(`(?:${storeDomain.replace('.', '\\.')})?\\/products\\/([a-zA-Z0-9_-]+)`, 'i');
+    const incomingMatch = incomingText.match(linkRegex);
+    if (incomingMatch && incomingMatch[1]) {
+        slug = incomingMatch[1];
+    } else if (recentHistoryText) {
+        const historyMatches = [...recentHistoryText.matchAll(new RegExp(`(?:${storeDomain.replace('.', '\\.')})?\\/products\\/([a-zA-Z0-9_-]+)`, 'ig'))];
+        if (historyMatches.length > 0) {
+            // Prioritize the latest mentioned product link
+            slug = historyMatches[historyMatches.length - 1][1];
+        }
     }
 
     let matchedProduct = null;
@@ -424,16 +462,24 @@ export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, rec
     }
 
     // 2. Product search inquiry
-    const isSearchIntent = /(dam|price|koto|ache|ase|dekhan|chai|order|shirt|t-shirt|pant|shoe|bag|watch|sharee|saree|gadget|drop shoulder|পণ্য|দাম|কত|আছে|চাই|অর্ডার|শার্ট|জুতা|ব্যাগ|ঘড়ি|শাড়ি)/i.test(incomingText);
-    if (isSearchIntent && !matchedProduct && base) {
-        const cleanQuery = incomingText
-            .replace(/\b(hi|hello|salam|assalamu\s+alaikum|kemon\s+achen|bhai|apnader|kache|ki|er|price|dam|koto|ache|ase|dekte|dekhan|chai|order|korbo|amar|lagbe)\b/gi, '')
-            .replace(/[?.,!/\\-]+/g, ' ')
-            .trim();
+    const searchPath = ecommerceConfig.product_search_path ? ecommerceConfig.product_search_path.replace(/\/$/, '') : '';
+    if (searchPath && base) {
+        // Collect candidate queries from incoming text first, then recent customer messages
+        let queriesToTry = extractSearchQueries(incomingText);
+        if (queriesToTry.length === 0 && recentHistoryText) {
+            const customerLines = recentHistoryText.split('\n')
+                .filter(l => l.startsWith('Customer:'))
+                .map(l => l.replace('Customer:', '').trim());
+            for (let i = customerLines.length - 1; i >= 0; i--) {
+                const qs = extractSearchQueries(customerLines[i]);
+                if (qs.length > 0) {
+                    queriesToTry = qs;
+                    break;
+                }
+            }
+        }
 
-        const searchPath = ecommerceConfig.product_search_path ? ecommerceConfig.product_search_path.replace(/\/$/, '') : '';
-
-        if (searchPath) {
+        if (queriesToTry.length > 0) {
             for (const q of queriesToTry) {
                 try {
                     const res = await axios.get(`${base}${searchPath}?search=${encodeURIComponent(q)}`, { timeout: 5000 });
@@ -445,7 +491,7 @@ export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, rec
                         ).join('\n');
                         contextParts.push(`[LIVE SEARCH RESULTS FROM STORE FOR "${q}"]:
 ${productList}
-* INSTRUCTION: Present these real products and prices clearly to the customer with their direct links! Do NOT invent any prices or links.`);
+* INSTRUCTION: Use these real product IDs, names, and prices. Do NOT invent any prices or product IDs.`);
                         break;
                     }
                 } catch (e) {
@@ -715,7 +761,10 @@ The JSON must have the following keys:
                     const hotline = ecommerce.support_hotline || '';
 
                     agentInstructions += `
-- "action": (string) If the customer has provided their delivery details (Name, Mobile Number, Address, and we know which product they want), return "place_order". Otherwise return null.
+- "action": (string) If and ONLY if:
+  1) You have customer's Name, Phone, and Delivery Address,
+  2) AND you have a VERIFIED "product_id" explicitly listed in [ACTIVE PRODUCT IN THIS CONVERSATION] or [LIVE SEARCH RESULTS FROM STORE].
+  If ANY delivery detail or verified product_id is missing, action MUST be null. NEVER invent, guess, or reuse an old product_id from a different product!
 - "order_data": (object or null) If action is "place_order", provide:
   {
     "name": (string) customer name,
@@ -723,22 +772,21 @@ The JSON must have the following keys:
     "address": (string) full delivery address,
     "area": (string) "Inside Dhaka" or "Outside Dhaka",
     "shipping_cost": (number) ${insideRate} for Inside Dhaka or ${outsideRate} for Outside,
-    "product_id": (number) ID of the product from context or search,
+    "product_id": (number) MUST be the exact numeric ID from [ACTIVE PRODUCT IN THIS CONVERSATION] or [LIVE SEARCH RESULTS FROM STORE],
     "quantity": (number) quantity ordered (default 1),
     "price": (number) unit price of the product
   }
 
 --- ORDER & CONVERSATION RULES ---
-1. MEMORY & CONTEXT AWARENESS:
-   - Carefully read the "RECENT CONVERSATION HISTORY" above! Never forget what the customer already told you!
-   - If the customer already gave their name/number/address in a previous message, DO NOT ask for them again!
-   - If they sent a product link earlier, REMEMBER that product! Don't ask "which product" again!
+1. MEMORY & PRODUCT FOCUS:
+   - Carefully read the "RECENT CONVERSATION HISTORY" above!
+   - If the customer mentions a NEW product, focus ONLY on that new product! Never order an old product when the customer is discussing a new one!
+   - If the customer already gave their name/number/address in a previous message, do not ask for them again.
 
-2. ORDER TAKING & AUTOMATIC PLACEMENT:
-   - When you have customer's Name, Phone Number, Delivery Address and Product:
-     * Set action to "place_order" with the "order_data" fields!
-     * In "reply_text", confirm that their order has been placed successfully via Cash on Delivery, mention the total amount (Product price + delivery ${curr}${insideRate}/${curr}${outsideRate}), and inform them our team will contact them shortly for dispatch!
-   - If any info is still missing (e.g. only address given, but no phone number), politely ask ONLY for the missing piece.
+2. STRICT ORDER PLACEMENT RULES:
+   - You can ONLY trigger "place_order" if you know the EXACT "product_id" from the live store context above.
+   - If the product ID is not in the store context, DO NOT place the order! Inform the customer politely with the product link or ask for product confirmation.
+   - When order is placed, confirm in "reply_text" with item name, total price, and Cash on Delivery.
 3. DELIVERY & PAYMENT:
    - Delivery Charges: Inside Dhaka ${curr}${insideRate}, Outside Dhaka ${curr}${outsideRate}.
    - Payment: Cash on Delivery (COD).
@@ -836,25 +884,38 @@ ${trackUrl || hotline ? `4. ORDER TRACKING & SUPPORT:
                 if (ecommerce && aiResponseObj.action === 'place_order' && aiResponseObj.order_data) {
                     try {
                         const od = aiResponseObj.order_data;
-                        console.log('[Ecommerce Chatbot] Placing automatic order:', od);
-                        const orderRes = await placeEcommerceOrder(ecommerce, {
-                            name: od.name || contactDoc.name || 'Customer',
-                            phone: od.phone || contactDoc.phone,
-                            address: od.address,
-                            shipping_cost: od.shipping_cost || ecommerce.shipping_inside_dhaka || 80,
-                            products: [
-                                {
-                                    product_id: od.product_id,
-                                    quantity: od.quantity || 1,
-                                    price: od.price
-                                }
-                            ],
-                            notes: `Ordered via WhatsApp AI Chatbot`
-                        });
+                        const contextHasProductId = liveContext && od.product_id && (
+                            liveContext.includes(`Product ID: ${od.product_id}`) ||
+                            liveContext.includes(`[ID: ${od.product_id}]`)
+                        );
 
-                        if (orderRes.success && orderRes.order) {
-                            const orderNum = orderRes.order.order_number || orderRes.order.id;
-                            finalReplyText += `\n\n🎉 আপনার অর্ডারটি সফলভাবে গ্রহণ করা হয়েছে! \nঅর্ডার নম্বর: #${orderNum} ${ecommerce.order_track_url ? `\nট্র্যাকিং লিংক: ${ecommerce.order_track_url}` : ''}`;
+                        if (!contextHasProductId) {
+                            console.warn(`[Ecommerce Chatbot] BLOCKED unverified product_id: ${od.product_id}. Live context did not verify this product!`);
+                            finalReplyText = finalReplyText.replace(/🎉[\s\S]*$/m, '').trim();
+                            if (!finalReplyText.includes('লিংক') && !finalReplyText.includes('link')) {
+                                finalReplyText += `\n\nদুঃখিত, পণ্যটির সঠিক তথ্য আমাদের স্টোর সিস্টেমে সরাসরি কনফার্ম করা সম্ভব হয়নি। অনুগ্রহ করে পণ্যটির সঠিক লিংক বা নাম শেয়ার করুন অথবা আমাদের হটলাইনে (${ecommerce.support_hotline || 'যোগাযোগ করুন'}) জানান।`;
+                            }
+                        } else {
+                            console.log('[Ecommerce Chatbot] Placing verified automatic order:', od);
+                            const orderRes = await placeEcommerceOrder(ecommerce, {
+                                name: od.name || contactDoc.name || 'Customer',
+                                phone: od.phone || contactDoc.phone,
+                                address: od.address,
+                                shipping_cost: od.shipping_cost || ecommerce.shipping_inside_dhaka || 80,
+                                products: [
+                                    {
+                                        product_id: od.product_id,
+                                        quantity: od.quantity || 1,
+                                        price: od.price
+                                    }
+                                ],
+                                notes: `Ordered via WhatsApp AI Chatbot`
+                            });
+
+                            if (orderRes.success && orderRes.order) {
+                                const orderNum = orderRes.order.order_number || orderRes.order.id;
+                                finalReplyText += `\n\n🎉 আপনার অর্ডারটি সফলভাবে গ্রহণ করা হয়েছে! \nঅর্ডার নম্বর: #${orderNum} ${ecommerce.order_track_url ? `\nট্র্যাকিং লিংক: ${ecommerce.order_track_url}` : ''}`;
+                            }
                         }
                     } catch (orderErr) {
                         console.error('[Ecommerce Chatbot] Error executing placeEcommerceOrder:', orderErr);
