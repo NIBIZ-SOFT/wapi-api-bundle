@@ -359,7 +359,11 @@ export const placeEcommerceOrder = async (ecommerceConfig, { name, phone, addres
             notes: notes || null,
             products: products.map(p => ({
                 product_id: p.product_id,
-                ...(p.product_variation_id ? { product_variation_id: p.product_variation_id } : {}),
+                ...(p.product_variation_id || p.variant_id ? {
+                    product_variation_id: p.product_variation_id || p.variant_id,
+                    variant_id: p.product_variation_id || p.variant_id
+                } : {}),
+                ...(p.variation_snapshot ? { variation_snapshot: p.variation_snapshot } : {}),
                 quantity: Number(p.quantity) || 1,
                 price: Number(p.price)
             }))
@@ -423,6 +427,173 @@ export const extractSearchQueries = (text) => {
     return [...new Set(queries.filter(q => q && q.length > 1))];
 };
 
+export const resolveProductVariation = (productDetails, userText, aiOrderData) => {
+    let variations = productDetails?.variations;
+    if (typeof variations === 'string') {
+        try {
+            variations = JSON.parse(variations);
+        } catch (e) {
+            variations = [];
+        }
+    }
+
+    let resolvedId = aiOrderData?.product_variation_id || null;
+    let resolvedSnapshot = aiOrderData?.variation_snapshot || null;
+
+    if (Array.isArray(variations) && variations.length > 0) {
+        // 1. If AI already provided a valid variation ID from the list
+        if (resolvedId) {
+            const found = variations.find(v => String(v.id) === String(resolvedId));
+            if (found) {
+                const parts = [];
+                if (found.color) parts.push(`Color: ${found.color}`);
+                if (found.attributes?.Size || found.size) parts.push(`Size: ${found.attributes?.Size || found.size}`);
+                return {
+                    variation_id: found.id,
+                    variation_snapshot: parts.join(', ') || resolvedSnapshot || 'Selected variation'
+                };
+            }
+        }
+
+        // 2. Auto-match from user's conversation text and variation_snapshot
+        let combinedText = `${resolvedSnapshot || ''} ${userText || ''}`.toLowerCase();
+        
+        const BENGALI_COLORS = {
+            'হলুদ': 'yellow',
+            'কালো': 'black',
+            'লাল': 'red',
+            'সাদা': 'white',
+            'নীল': 'blue',
+            'সবুজ': 'green',
+            'মেরুন': 'maroon',
+            'অলিভ': 'olive',
+            'গোলাপি': 'pink',
+            'গোলাপী': 'pink',
+            'লেমন': 'lemon'
+        };
+        for (const [bn, en] of Object.entries(BENGALI_COLORS)) {
+            if (combinedText.includes(bn)) {
+                combinedText += ` ${en}`;
+            }
+        }
+
+        // Pass A: Match both color and size
+        for (const v of variations) {
+            const color = (v.color || '').toLowerCase();
+            const size = (v.attributes?.Size || v.size || '').toLowerCase();
+
+            const colorMatches = color && combinedText.includes(color);
+            const sizeMatches = size && (
+                new RegExp(`\\b${size}\\b`, 'i').test(combinedText) ||
+                combinedText.includes(`${size} size`) ||
+                combinedText.includes(`size ${size}`) ||
+                combinedText.includes(`সাইজ ${size}`)
+            );
+
+            if (colorMatches && sizeMatches) {
+                const parts = [];
+                if (v.color) parts.push(`Color: ${v.color}`);
+                if (v.attributes?.Size || v.size) parts.push(`Size: ${v.attributes?.Size || v.size}`);
+                return {
+                    variation_id: v.id,
+                    variation_snapshot: parts.join(', ')
+                };
+            }
+        }
+
+        // Pass B: Match color only
+        for (const v of variations) {
+            const color = (v.color || '').toLowerCase();
+            if (color && combinedText.includes(color)) {
+                const parts = [`Color: ${v.color}`];
+                if (v.attributes?.Size || v.size) parts.push(`Size: ${v.attributes?.Size || v.size}`);
+                return {
+                    variation_id: v.id,
+                    variation_snapshot: parts.join(', ')
+                };
+            }
+        }
+
+        // Pass C: Match size only
+        for (const v of variations) {
+            const size = (v.attributes?.Size || v.size || '').toLowerCase();
+            if (size && (new RegExp(`\\b${size}\\b`, 'i').test(combinedText) || combinedText.includes(`সাইজ ${size}`))) {
+                const parts = [];
+                if (v.color) parts.push(`Color: ${v.color}`);
+                parts.push(`Size: ${v.attributes?.Size || v.size}`);
+                return {
+                    variation_id: v.id,
+                    variation_snapshot: parts.join(', ')
+                };
+            }
+        }
+    }
+
+    // 3. Fallback: If snapshot is not yet set, extract any explicit color / size mentioned in conversation
+    if (!resolvedSnapshot && userText) {
+        const textLower = userText.toLowerCase();
+        const extractedParts = [];
+        const colorMap = {
+            'yellow': 'Yellow', 'black': 'Black', 'white': 'White', 'red': 'Red',
+            'blue': 'Blue', 'green': 'Green', 'maroon': 'Maroon', 'olive': 'Olive',
+            'হলুদ': 'Yellow', 'কালো': 'Black', 'লাল': 'Red', 'সাদা': 'White', 'নীল': 'Blue', 'সবুজ': 'Green'
+        };
+        for (const [k, v] of Object.entries(colorMap)) {
+            if (textLower.includes(k)) {
+                extractedParts.push(`Color: ${v}`);
+                break;
+            }
+        }
+        const sizeMatch = textLower.match(/\b(xxl|xl|l|m|s|xs)\b/i) || textLower.match(/সাইজ\s*([a-zA-Z0-9]+)/i);
+        if (sizeMatch && sizeMatch[1]) {
+            extractedParts.push(`Size: ${sizeMatch[1].toUpperCase()}`);
+        }
+        if (extractedParts.length > 0) {
+            resolvedSnapshot = extractedParts.join(', ');
+        }
+    }
+
+    return {
+        variation_id: resolvedId,
+        variation_snapshot: resolvedSnapshot
+    };
+};
+
+export const formatProductContext = (product, ecommerceConfig) => {
+    if (!product) return '';
+    const curr = ecommerceConfig?.currency || '৳';
+    const cleanDesc = (product.description || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').slice(0, 350);
+
+    let variations = product.variations;
+    if (typeof variations === 'string') {
+        try {
+            variations = JSON.parse(variations);
+        } catch (e) {
+            variations = [];
+        }
+    }
+
+    let variationText = '';
+    if (variations && Array.isArray(variations) && variations.length > 0) {
+        const varLines = variations.slice(0, 36).map(v => {
+            const color = v.color ? `Color: ${v.color}` : '';
+            const size = (v.attributes?.Size || v.size) ? `Size: ${v.attributes?.Size || v.size}` : '';
+            const label = [color, size].filter(Boolean).join(', ');
+            return `  * Variation ID: ${v.id} | ${label || 'Default'} | SKU: ${v.sku || 'N/A'}`;
+        }).join('\n');
+        variationText = `\n- Available Variations (Colors & Sizes):\n${varLines}`;
+    }
+
+    return `[ACTIVE PRODUCT IN THIS CONVERSATION]:
+- Product ID: ${product.id}
+- Product Name: ${product.name}
+- Product SKU: ${product.product_sku || product.sku || 'N/A'}
+- Regular Price: ${curr}${product.price}
+- Offer / Sale Price: ${curr}${product.sale_price || product.price}
+- Link: ${ecommerceConfig?.store_url ? `${ecommerceConfig.store_url.replace(/\/$/, '')}/products/${product.slug}` : product.slug}${variationText}
+- Description: ${cleanDesc}`;
+};
+
 export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, recentHistoryText = '') => {
     if (!ecommerceConfig || !ecommerceConfig.enabled || !incomingText || typeof incomingText !== 'string') return '';
     const contextParts = [];
@@ -439,7 +610,6 @@ export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, rec
     } else if (recentHistoryText) {
         const historyMatches = [...recentHistoryText.matchAll(new RegExp(`(?:${storeDomain.replace('.', '\\.')})?\\/products\\/([a-zA-Z0-9_-]+)`, 'ig'))];
         if (historyMatches.length > 0) {
-            // Prioritize the latest mentioned product link
             slug = historyMatches[historyMatches.length - 1][1];
         }
     }
@@ -448,16 +618,7 @@ export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, rec
     if (slug) {
         matchedProduct = await getEcommerceLiveProduct(ecommerceConfig, slug);
         if (matchedProduct) {
-            const cleanDesc = (matchedProduct.description || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').slice(0, 350);
-            const curr = ecommerceConfig.currency || '৳';
-            contextParts.push(`[ACTIVE PRODUCT IN THIS CONVERSATION]:
-- Product ID: ${matchedProduct.id}
-- Product Name: ${matchedProduct.name}
-- Product SKU: ${matchedProduct.product_sku || matchedProduct.sku || 'N/A'}
-- Regular Price: ${curr}${matchedProduct.price}
-- Offer / Sale Price: ${curr}${matchedProduct.sale_price || matchedProduct.price}
-- Link: ${ecommerceConfig.store_url ? `${ecommerceConfig.store_url.replace(/\/$/, '')}/products/${matchedProduct.slug}` : matchedProduct.slug}
-- Description: ${cleanDesc}`);
+            contextParts.push(formatProductContext(matchedProduct, ecommerceConfig));
         }
     }
 
@@ -492,6 +653,16 @@ export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, rec
                         contextParts.push(`[LIVE SEARCH RESULTS FROM STORE FOR "${q}"]:
 ${productList}
 * INSTRUCTION: Use these real product IDs, names, and prices. Do NOT invent any prices or product IDs.`);
+
+                        // Load variations for the top matching product if not already loaded
+                        if (!matchedProduct && products[0]?.slug) {
+                            try {
+                                matchedProduct = await getEcommerceLiveProduct(ecommerceConfig, products[0].slug);
+                                if (matchedProduct) {
+                                    contextParts.unshift(formatProductContext(matchedProduct, ecommerceConfig));
+                                }
+                            } catch (e) {}
+                        }
                         break;
                     }
                 } catch (e) {
@@ -773,6 +944,8 @@ The JSON must have the following keys:
     "area": (string) "Inside Dhaka" or "Outside Dhaka",
     "shipping_cost": (number) ${insideRate} for Inside Dhaka or ${outsideRate} for Outside,
     "product_id": (number) MUST be the exact numeric ID from [ACTIVE PRODUCT IN THIS CONVERSATION] or [LIVE SEARCH RESULTS FROM STORE],
+    "product_variation_id": (number or null) If the product has variations (Colors/Sizes), specify the exact numeric Variation ID chosen by customer,
+    "variation_snapshot": (string or null) E.g. "Color: Yellow, Size: M" representing customer's chosen color and size,
     "quantity": (number) quantity ordered (default 1),
     "price": (number) unit price of the product
   }
@@ -783,10 +956,11 @@ The JSON must have the following keys:
    - If the customer mentions a NEW product, focus ONLY on that new product! Never order an old product when the customer is discussing a new one!
    - If the customer already gave their name/number/address in a previous message, do not ask for them again.
 
-2. STRICT ORDER PLACEMENT RULES:
+2. STRICT ORDER PLACEMENT & VARIATION RULES:
    - You can ONLY trigger "place_order" if you know the EXACT "product_id" from the live store context above.
-   - If the product ID is not in the store context, DO NOT place the order! Inform the customer politely with the product link or ask for product confirmation.
-   - When order is placed, confirm in "reply_text" with item name, total price, and Cash on Delivery.
+   - If the product lists "Available Variations (Colors & Sizes)" and the customer has NOT selected a color or size, DO NOT place the order yet! Ask the customer politely which color or size they prefer.
+   - Once the customer chooses a color/size, match it to the available variations and set "product_variation_id" and "variation_snapshot" in "order_data".
+   - When order is placed, confirm in "reply_text" with item name, chosen variation (if any), total price, and Cash on Delivery.
 3. DELIVERY & PAYMENT:
    - Delivery Charges: Inside Dhaka ${curr}${insideRate}, Outside Dhaka ${curr}${outsideRate}.
    - Payment: Cash on Delivery (COD).
@@ -897,24 +1071,69 @@ ${trackUrl || hotline ? `4. ORDER TRACKING & SUPPORT:
                             }
                         } else {
                             console.log('[Ecommerce Chatbot] Placing verified automatic order:', od);
-                            const orderRes = await placeEcommerceOrder(ecommerce, {
-                                name: od.name || contactDoc.name || 'Customer',
-                                phone: od.phone || contactDoc.phone,
-                                address: od.address,
-                                shipping_cost: od.shipping_cost || ecommerce.shipping_inside_dhaka || 80,
-                                products: [
-                                    {
-                                        product_id: od.product_id,
-                                        quantity: od.quantity || 1,
-                                        price: od.price
-                                    }
-                                ],
-                                notes: `Ordered via WhatsApp AI Chatbot`
-                            });
 
-                            if (orderRes.success && orderRes.order) {
-                                const orderNum = orderRes.order.order_number || orderRes.order.id;
-                                finalReplyText += `\n\n🎉 আপনার অর্ডারটি সফলভাবে গ্রহণ করা হয়েছে! \nঅর্ডার নম্বর: #${orderNum} ${ecommerce.order_track_url ? `\nট্র্যাকিং লিংক: ${ecommerce.order_track_url}` : ''}`;
+                            // Load live product details to accurately resolve variation and attributes
+                            let pDetail = null;
+                            try {
+                                pDetail = await getEcommerceLiveProduct(ecommerce, od.product_id);
+                            } catch (e) {
+                                console.warn('[Ecommerce Chatbot] Could not fetch product detail for variation resolution:', e.message);
+                            }
+
+                            // If product has variations, resolve matching variation ID and snapshot
+                            const resolvedVar = resolveProductVariation(
+                                pDetail,
+                                `${incomingText} ${recentHistoryText}`,
+                                od
+                            );
+
+                            // Check if product requires variation selection but none was specified
+                            let pVariations = pDetail?.variations;
+                            if (typeof pVariations === 'string') {
+                                try { pVariations = JSON.parse(pVariations); } catch (e) { pVariations = []; }
+                            }
+                            const hasVariations = Array.isArray(pVariations) && pVariations.length > 0;
+
+                            if (hasVariations && !resolvedVar.variation_id && !resolvedVar.variation_snapshot) {
+                                console.warn(`[Ecommerce Chatbot] Product ${od.product_id} has variations, but customer has not specified color/size yet.`);
+                                finalReplyText = finalReplyText.replace(/🎉[\s\S]*$/m, '').trim();
+                                const varList = pVariations.slice(0, 8).map(v => {
+                                    const c = v.color ? `কালার: ${v.color}` : '';
+                                    const s = (v.attributes?.Size || v.size) ? `সাইজ: ${v.attributes?.Size || v.size}` : '';
+                                    return [c, s].filter(Boolean).join(', ');
+                                }).filter(Boolean);
+                                const uniqueVars = [...new Set(varList)].join(' | ');
+
+                                finalReplyText += `\n\nঅনুগ্রহ করে আপনার পছন্দের সাইজ বা কালারটি জানান (উপলব্ধ: ${uniqueVars || 'উপরে দেওয়া অপশনগুলো'}) যাতে আমরা আপনার সঠিক পণ্যটি কনফার্ম করতে পারি।`;
+                            } else {
+                                const productItem = {
+                                    product_id: od.product_id,
+                                    quantity: od.quantity || 1,
+                                    price: od.price
+                                };
+
+                                if (resolvedVar.variation_id) {
+                                    productItem.product_variation_id = resolvedVar.variation_id;
+                                    productItem.variant_id = resolvedVar.variation_id;
+                                }
+                                if (resolvedVar.variation_snapshot) {
+                                    productItem.variation_snapshot = resolvedVar.variation_snapshot;
+                                }
+
+                                const orderRes = await placeEcommerceOrder(ecommerce, {
+                                    name: od.name || contactDoc.name || 'Customer',
+                                    phone: od.phone || contactDoc.phone,
+                                    address: od.address,
+                                    shipping_cost: od.shipping_cost || ecommerce.shipping_inside_dhaka || 80,
+                                    products: [productItem],
+                                    notes: `Ordered via WhatsApp AI Chatbot${resolvedVar.variation_snapshot ? ` [${resolvedVar.variation_snapshot}]` : ''}`
+                                });
+
+                                if (orderRes.success && orderRes.order) {
+                                    const orderNum = orderRes.order.order_number || orderRes.order.id;
+                                    const varNote = resolvedVar.variation_snapshot ? `\nভ্যারিয়েশন: ${resolvedVar.variation_snapshot}` : '';
+                                    finalReplyText += `\n\n🎉 আপনার অর্ডারটি সফলভাবে গ্রহণ করা হয়েছে! \nঅর্ডার নম্বর: #${orderNum}${varNote} ${ecommerce.order_track_url ? `\nট্র্যাকিং লিংক: ${ecommerce.order_track_url}` : ''}`;
+                                }
                             }
                         }
                     } catch (orderErr) {
