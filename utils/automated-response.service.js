@@ -594,6 +594,35 @@ export const formatProductContext = (product, ecommerceConfig) => {
 - Description: ${cleanDesc}`;
 };
 
+export const cleanReplyUrlsAndFormatting = (text) => {
+    if (!text || typeof text !== 'string') return text;
+    let cleaned = text;
+
+    // 1. Separate numbered list items into distinct lines if bunched together
+    cleaned = cleaned.replace(/([^\n])\s+([১-৯0-9]+\.\s+)/g, '$1\n\n$2');
+
+    // 2. Remove surrounding parentheses around links like "(লিংক: https://...)" or "(https://...)"
+    cleaned = cleaned.replace(/\(([^)]*?)(https?:\/\/[^\s)]+)\)/gi, (match, prefix, url) => {
+        const cleanPrefix = prefix ? prefix.trim() + ' ' : '';
+        return ` ${cleanPrefix}${url.trim()} `;
+    });
+
+    // 3. Remove surrounding brackets around links like "[লিংক: https://...]" or "[https://...]"
+    cleaned = cleaned.replace(/\[([^\]]*?)(https?:\/\/[^\s\]]+)\]/gi, (match, prefix, url) => {
+        const cleanPrefix = prefix ? prefix.trim() + ' ' : '';
+        return ` ${cleanPrefix}${url.trim()} `;
+    });
+
+    // 4. Strip any trailing parenthesis or bracket directly stuck to a URL
+    cleaned = cleaned.replace(/(https?:\/\/[^\s)]+)\)+/g, '$1');
+    cleaned = cleaned.replace(/(https?:\/\/[^\s\]]+)\]+/g, '$1');
+
+    // 5. Clean up extra spaces on lines
+    cleaned = cleaned.split('\n').map(line => line.replace(/[ \t]+/g, ' ').trim()).join('\n');
+
+    return cleaned.trim();
+};
+
 export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, recentHistoryText = '') => {
     if (!ecommerceConfig || !ecommerceConfig.enabled || !incomingText || typeof incomingText !== 'string') return '';
     const contextParts = [];
@@ -648,11 +677,11 @@ export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, rec
                     if (products.length > 0) {
                         const curr = ecommerceConfig.currency || '৳';
                         const productList = products.map((p, idx) => 
-                            `${idx + 1}. [ID: ${p.id}] ${p.name} — Price: ${curr}${p.sale_price || p.price} — Link: ${ecommerceConfig.store_url ? `${ecommerceConfig.store_url.replace(/\/$/, '')}/products/${p.slug}` : p.slug}`
-                        ).join('\n');
+                            `${idx + 1}. [ID: ${p.id}] ${p.name} — Price: ${curr}${p.sale_price || p.price}\n   Link: ${ecommerceConfig.store_url ? `${ecommerceConfig.store_url.replace(/\/$/, '')}/products/${p.slug}` : p.slug}`
+                        ).join('\n\n');
                         contextParts.push(`[LIVE SEARCH RESULTS FROM STORE FOR "${q}"]:
 ${productList}
-* INSTRUCTION: Use these real product IDs, names, and prices. Do NOT invent any prices or product IDs.`);
+* INSTRUCTION: Use these real product IDs, names, and prices. When listing products, put EACH product on a new line. NEVER wrap links in parentheses () and NEVER attach ')' to URLs.`);
 
                         // Load variations for the top matching product if not already loaded
                         if (!matchedProduct && products[0]?.slug) {
@@ -964,7 +993,15 @@ The JSON must have the following keys:
 3. DELIVERY & PAYMENT:
    - Delivery Charges: Inside Dhaka ${curr}${insideRate}, Outside Dhaka ${curr}${outsideRate}.
    - Payment: Cash on Delivery (COD).
-${trackUrl || hotline ? `4. ORDER TRACKING & SUPPORT:
+
+4. PRODUCT LISTING & URL FORMATTING:
+   - When suggesting products or sharing links, put EACH item on its own separate line.
+   - CRITICAL: NEVER wrap URLs inside parentheses like (https://...) or brackets [https://...]!
+   - CRITICAL: NEVER attach ")" or any punctuation directly to the end of a URL! In WhatsApp, any trailing ")" breaks the clickable link and causes 404 errors!
+   - Always format product listings with clean line breaks, for example:
+     ১. [Product Name] - [Price]
+     লিংক: https://store.com/products/slug
+${trackUrl || hotline ? `5. ORDER TRACKING & SUPPORT:
    - ${trackUrl ? `Tracking link: ${trackUrl}` : ''} ${hotline ? `| Hotline: ${hotline}` : ''}` : ''}`;
                 } else if (customApi) {
                     if (customApi.instructions) {
@@ -1157,6 +1194,9 @@ ${trackUrl || hotline ? `4. ORDER TRACKING & SUPPORT:
                         console.error('[Custom API Chatbot] Action error:', customActionErr);
                     }
                 }
+
+                // Clean any parentheses around links, dangling closing parens, and ensure list formatting
+                finalReplyText = cleanReplyUrlsAndFormatting(finalReplyText);
 
                 let messageTypeToSend = 'text';
                 let messageFile = null;
