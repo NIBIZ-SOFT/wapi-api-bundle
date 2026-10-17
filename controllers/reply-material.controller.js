@@ -30,9 +30,12 @@ export const createReplyMaterial = async (req, res) => {
         }
 
         const validWabaId = (waba_id && waba_id !== 'undefined' && waba_id !== 'null') ? waba_id : null;
+        const workspaceId = req.headers['x-workspace-id'] || req.body.workspace_id || req.query.workspace_id;
+        const validWorkspaceId = (workspaceId && workspaceId !== 'undefined' && workspaceId !== 'null' && mongoose.Types.ObjectId.isValid(workspaceId)) ? new mongoose.Types.ObjectId(workspaceId) : null;
 
         const replyMaterial = await ReplyMaterial.create({
             user_id: userId,
+            workspace_id: validWorkspaceId,
             waba_id: validWabaId,
             type,
             name,
@@ -82,8 +85,13 @@ export const getReplyMaterials = async (req, res) => {
                 deleted_at: null
             };
 
-            // We do NOT filter standard reply materials by waba_id
-            // so they are globally available across all WABA accounts for this user.
+            const workspaceId = req.headers['x-workspace-id'] || req.query.workspace_id;
+            if (workspaceId && workspaceId !== 'undefined' && workspaceId !== 'null' && mongoose.Types.ObjectId.isValid(workspaceId)) {
+                query.$or = [
+                    { workspace_id: new mongoose.Types.ObjectId(workspaceId) },
+                    { workspace_id: null }
+                ];
+            }
 
             if (search) {
                 query.name = { $regex: search, $options: 'i' };

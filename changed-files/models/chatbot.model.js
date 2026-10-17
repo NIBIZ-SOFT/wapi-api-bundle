@@ -8,6 +8,12 @@ const chatbotSchema = new mongoose.Schema(
             required: true,
             index: true
         },
+        workspace_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Workspace',
+            index: true,
+            default: null
+        },
         created_by: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User'
@@ -92,6 +98,34 @@ const chatbotSchema = new mongoose.Schema(
         voice_settings: {
             type: mongoose.Schema.Types.Mixed,
             default: {}
+        },
+        category: {
+            type: String,
+            enum: ['ecommerce', 'customer_support', 'erp_crm', 'custom_api'],
+            default: 'customer_support'
+        },
+        custom_api: {
+            enabled: { type: Boolean, default: false },
+            api_base_url: { type: String, trim: true, default: '' },
+            headers: { type: mongoose.Schema.Types.Mixed, default: {} },
+            lookup_endpoint: { type: String, trim: true, default: '' },
+            action_endpoint: { type: String, trim: true, default: '' },
+            action_name: { type: String, trim: true, default: '' },
+            instructions: { type: String, trim: true, default: '' }
+        },
+        ecommerce: {
+            enabled: { type: Boolean, default: false },
+            store_url: { type: String, trim: true, default: '' },
+            api_base_url: { type: String, trim: true, default: '' },
+            product_search_path: { type: String, trim: true, default: '' },
+            product_detail_path: { type: String, trim: true, default: '' },
+            order_checkout_path: { type: String, trim: true, default: '' },
+            order_track_url: { type: String, trim: true, default: '' },
+            support_hotline: { type: String, trim: true, default: '' },
+            shipping_inside_dhaka: { type: Number, default: 0 },
+            shipping_outside_dhaka: { type: Number, default: 0 },
+            currency: { type: String, trim: true, default: '' },
+            payment_methods: { type: [String], default: [] }
         },
         deleted_at: {
             type: Date,

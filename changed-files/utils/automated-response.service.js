@@ -2,6 +2,7 @@ import db from '../models/index.js';
 import unifiedWhatsAppService from '../services/whatsapp/unified-whatsapp.service.js';
 import { callAIModel } from './ai-utils.js';
 import mongoose from 'mongoose';
+import axios from 'axios';
 
 const {
     WorkingHours,
@@ -316,6 +317,197 @@ export const sendOmnichannelMessageHelper = async ({ contactDoc, messageType, te
     }
 };
 
+export const getEcommerceLiveProduct = async (ecommerceConfig, slug) => {
+    if (!ecommerceConfig || !ecommerceConfig.api_base_url) return null;
+    const base = ecommerceConfig.api_base_url.replace(/\/$/, '');
+    const detailPath = ecommerceConfig.product_detail_path ? ecommerceConfig.product_detail_path.replace(/\/$/, '') : '';
+    const searchPath = ecommerceConfig.product_search_path ? ecommerceConfig.product_search_path.replace(/\/$/, '') : '';
+
+    if (detailPath) {
+        try {
+            const res = await axios.get(`${base}${detailPath}/${encodeURIComponent(slug)}`, { timeout: 6000 });
+            if (res.data?.data) return res.data.data;
+        } catch (e) {
+            // try searchPath if provided
+        }
+    }
+    if (searchPath) {
+        try {
+            const res = await axios.get(`${base}${searchPath}?slug=${encodeURIComponent(slug)}`, { timeout: 6000 });
+            return (res.data?.data || [])[0] || null;
+        } catch (e) {
+            return null;
+        }
+    }
+    return null;
+};
+
+export const placeEcommerceOrder = async (ecommerceConfig, { name, phone, address, area, shipping_cost, products, notes }) => {
+    if (!ecommerceConfig || !ecommerceConfig.api_base_url || !ecommerceConfig.order_checkout_path) {
+        return { success: false, message: 'No store API or checkout path configured' };
+    }
+    const base = ecommerceConfig.api_base_url.replace(/\/$/, '');
+    const checkoutPath = ecommerceConfig.order_checkout_path;
+
+    try {
+        const payload = {
+            name,
+            contact_number: phone,
+            shipping_address: address,
+            shipping_cost: Number(shipping_cost) || ecommerceConfig.shipping_inside_dhaka || 80,
+            payment_method: 'Cash on Delivery',
+            notes: notes || null,
+            products: products.map(p => ({
+                product_id: p.product_id,
+                ...(p.product_variation_id ? { product_variation_id: p.product_variation_id } : {}),
+                quantity: Number(p.quantity) || 1,
+                price: Number(p.price)
+            }))
+        };
+
+        const res = await axios.post(`${base}${checkoutPath}`, payload, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            timeout: 10000
+        });
+
+        if (res.data?.order) {
+            return {
+                success: true,
+                order: res.data.order
+            };
+        }
+        return { success: false, message: 'Order checkout did not return order object' };
+    } catch (err) {
+        console.error('[Ecommerce Order API] Error placing order:', err.response?.data || err.message);
+        return { success: false, error: err.response?.data?.message || err.message };
+    }
+};
+
+export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, recentHistoryText = '') => {
+    if (!ecommerceConfig || !ecommerceConfig.enabled || !incomingText || typeof incomingText !== 'string') return '';
+    const combinedText = `${recentHistoryText} \n ${incomingText}`;
+    const contextParts = [];
+
+    const base = (ecommerceConfig.api_base_url || '').replace(/\/$/, '');
+    const storeDomain = ecommerceConfig.store_url ? ecommerceConfig.store_url.replace(/^https?:\/\//i, '').replace(/\/.*$/, '') : '';
+
+    // 1. Direct product link or slug in incoming text or recent conversation
+    let slug = null;
+    if (storeDomain) {
+        const domainRegex = new RegExp(`${storeDomain.replace('.', '\\.')}\\/products\\/([a-zA-Z0-9_-]+)`, 'i');
+        const match = combinedText.match(domainRegex);
+        if (match && match[1]) slug = match[1];
+    }
+    if (!slug) {
+        const genericMatch = combinedText.match(/\/products\/([a-zA-Z0-9_-]+)/i);
+        if (genericMatch && genericMatch[1]) slug = genericMatch[1];
+    }
+
+    let matchedProduct = null;
+    if (slug) {
+        matchedProduct = await getEcommerceLiveProduct(ecommerceConfig, slug);
+        if (matchedProduct) {
+            const cleanDesc = (matchedProduct.description || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').slice(0, 350);
+            const curr = ecommerceConfig.currency || '৳';
+            contextParts.push(`[ACTIVE PRODUCT IN THIS CONVERSATION]:
+- Product ID: ${matchedProduct.id}
+- Product Name: ${matchedProduct.name}
+- Product SKU: ${matchedProduct.product_sku || matchedProduct.sku || 'N/A'}
+- Regular Price: ${curr}${matchedProduct.price}
+- Offer / Sale Price: ${curr}${matchedProduct.sale_price || matchedProduct.price}
+- Link: ${ecommerceConfig.store_url ? `${ecommerceConfig.store_url.replace(/\/$/, '')}/products/${matchedProduct.slug}` : matchedProduct.slug}
+- Description: ${cleanDesc}`);
+        }
+    }
+
+    // 2. Product search inquiry
+    const isSearchIntent = /(dam|price|koto|ache|ase|dekhan|chai|order|shirt|t-shirt|pant|shoe|bag|watch|sharee|saree|gadget|drop shoulder|পণ্য|দাম|কত|আছে|চাই|অর্ডার|শার্ট|জুতা|ব্যাগ|ঘড়ি|শাড়ি)/i.test(incomingText);
+    if (isSearchIntent && !matchedProduct && base) {
+        const cleanQuery = incomingText
+            .replace(/\b(hi|hello|salam|assalamu\s+alaikum|kemon\s+achen|bhai|apnader|kache|ki|er|price|dam|koto|ache|ase|dekte|dekhan|chai|order|korbo|amar|lagbe)\b/gi, '')
+            .replace(/[?.,!/\\-]+/g, ' ')
+            .trim();
+
+        const searchPath = ecommerceConfig.product_search_path ? ecommerceConfig.product_search_path.replace(/\/$/, '') : '';
+
+        if (searchPath) {
+            for (const q of queriesToTry) {
+                try {
+                    const res = await axios.get(`${base}${searchPath}?search=${encodeURIComponent(q)}`, { timeout: 5000 });
+                    const products = (res.data?.data || []).slice(0, 5);
+                    if (products.length > 0) {
+                        const curr = ecommerceConfig.currency || '৳';
+                        const productList = products.map((p, idx) => 
+                            `${idx + 1}. [ID: ${p.id}] ${p.name} — Price: ${curr}${p.sale_price || p.price} — Link: ${ecommerceConfig.store_url ? `${ecommerceConfig.store_url.replace(/\/$/, '')}/products/${p.slug}` : p.slug}`
+                        ).join('\n');
+                        contextParts.push(`[LIVE SEARCH RESULTS FROM STORE FOR "${q}"]:
+${productList}
+* INSTRUCTION: Present these real products and prices clearly to the customer with their direct links! Do NOT invent any prices or links.`);
+                        break;
+                    }
+                } catch (e) {
+                    console.error('[Ecommerce Live Context] Error searching products:', e.message);
+                }
+            }
+        }
+    }
+
+    // 3. Order tracking
+    if (/(track|tracking|order koi|order status|kobe pabo|delivery kobe|ট্র্যাক|ট্র্যাকিং|অর্ডার কোথায়|কবে পাবো)/i.test(incomingText)) {
+        if (ecommerceConfig.order_track_url || ecommerceConfig.support_hotline) {
+            contextParts.push(`[ORDER TRACKING INSTRUCTION]:
+- Tell the customer: "আপনার অর্ডার ট্র্যাক করতে এই লিংকে ভিজিট করুন: ${ecommerceConfig.order_track_url || ''} ${ecommerceConfig.support_hotline ? `অথবা আমাদের হেল্পলাইনে যোগাযোগ করুন: ${ecommerceConfig.support_hotline}` : ''}"`);
+        }
+    }
+
+    return contextParts.join('\n\n');
+};
+
+export const getCustomApiLiveContext = async (customApiConfig, incomingText) => {
+    if (!customApiConfig || !customApiConfig.enabled || !customApiConfig.api_base_url || !customApiConfig.lookup_endpoint) return '';
+    try {
+        const base = customApiConfig.api_base_url.replace(/\/$/, '');
+        const endpoint = customApiConfig.lookup_endpoint.startsWith('/') ? customApiConfig.lookup_endpoint : `/${customApiConfig.lookup_endpoint}`;
+        const delimiter = endpoint.includes('?') ? '&' : '?';
+        const url = `${base}${endpoint}${delimiter}q=${encodeURIComponent(incomingText)}`;
+        
+        const headers = {
+            'Accept': 'application/json',
+            ...(customApiConfig.headers || {})
+        };
+        const res = await axios.get(url, { headers, timeout: 6000 });
+        if (res.data) {
+            return `--- EXTERNAL SYSTEM / ERP DATA ---\n${JSON.stringify(res.data).substring(0, 1500)}`;
+        }
+    } catch (err) {
+        console.warn('[Custom API Lookup] Error:', err.message);
+    }
+    return '';
+};
+
+export const executeCustomApiAction = async (customApiConfig, payload) => {
+    if (!customApiConfig || !customApiConfig.api_base_url || !customApiConfig.action_endpoint) {
+        return { success: false, message: 'Custom action endpoint not configured' };
+    }
+    try {
+        const base = customApiConfig.api_base_url.replace(/\/$/, '');
+        const endpoint = customApiConfig.action_endpoint.startsWith('/') ? customApiConfig.action_endpoint : `/${customApiConfig.action_endpoint}`;
+        const headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            ...(customApiConfig.headers || {})
+        };
+        const res = await axios.post(`${base}${endpoint}`, payload, { headers, timeout: 10000 });
+        return { success: true, data: res.data };
+    } catch (err) {
+        console.error('[Custom API Action] Execution error:', err.response?.data || err.message);
+        return { success: false, error: err.response?.data || err.message };
+    }
+};
+
 export const sendAutomatedReply = async (params) => {
     const { wabaId, contactId, replyType, replyId, incomingText, userId, whatsappPhoneNumberId, sequenceAutomationData } = params;
 
@@ -417,6 +609,7 @@ export const sendAutomatedReply = async (params) => {
                     if (io) {
                         io.emit('agent:escalation', {
                             contact_id: contactDoc._id.toString(),
+                            workspace_id: contactDoc.workspace_id?.toString() || null,
                             user_id: userId,
                             message: "AI Agent reached maximum message limit",
                             timestamp: new Date().toISOString()
@@ -455,6 +648,7 @@ export const sendAutomatedReply = async (params) => {
                         if (io) {
                             io.emit('agent:escalation', {
                                 contact_id: contactDoc._id.toString(),
+                                workspace_id: contactDoc.workspace_id?.toString() || null,
                                 user_id: userId,
                                 message: "User requested human agent via keyword",
                                 timestamp: new Date().toISOString()
@@ -481,8 +675,91 @@ export const sendAutomatedReply = async (params) => {
                     }
                 }
 
-                let agentInstructions = `\n\n--- SYSTEM INSTRUCTIONS ---\nYou are an advanced AI Agent. You MUST respond with a valid JSON object only. Do not output markdown code blocks or any other text outside the JSON.\nThe JSON must have the following keys:\n- "reply_text": (string) Your actual helpful response to the user.`;
-                
+                const ecommerce = chatbot.ecommerce && chatbot.ecommerce.enabled ? chatbot.ecommerce : null;
+
+                // Fetch recent conversation history so the bot has memory of what was discussed
+                let recentHistoryText = '';
+                try {
+                    const recentMsgs = await Message.find({ contact_id: contactDoc._id })
+                        .sort({ wa_timestamp: -1 })
+                        .limit(8)
+                        .lean();
+                    if (recentMsgs && recentMsgs.length > 0) {
+                        recentHistoryText = recentMsgs.reverse().map(m => 
+                            `${m.direction === 'inbound' ? 'Customer' : 'Assistant'}: ${m.content}`
+                        ).join('\n');
+                    }
+                } catch (historyErr) {
+                    console.error('[Chatbot] Error fetching recent messages history:', historyErr);
+                }
+
+                let liveContext = '';
+                const customApi = chatbot.custom_api && chatbot.custom_api.enabled ? chatbot.custom_api : null;
+
+                if (ecommerce) {
+                    liveContext = await getEcommerceLiveContext(ecommerce, incomingText, recentHistoryText);
+                } else if (customApi) {
+                    liveContext = await getCustomApiLiveContext(customApi, incomingText);
+                }
+
+                let agentInstructions = `\n\n--- SYSTEM INSTRUCTIONS ---\nYou are an advanced AI Agent for customer support and sales.
+You MUST respond with a valid JSON object only. Do not output markdown code blocks or any other text outside the JSON.
+The JSON must have the following keys:
+- "reply_text": (string) Your actual helpful, courteous response in the customer's language.`;
+
+                if (ecommerce) {
+                    const curr = ecommerce.currency || '৳';
+                    const insideRate = ecommerce.shipping_inside_dhaka || 80;
+                    const outsideRate = ecommerce.shipping_outside_dhaka || 120;
+                    const trackUrl = ecommerce.order_track_url || '';
+                    const hotline = ecommerce.support_hotline || '';
+
+                    agentInstructions += `
+- "action": (string) If the customer has provided their delivery details (Name, Mobile Number, Address, and we know which product they want), return "place_order". Otherwise return null.
+- "order_data": (object or null) If action is "place_order", provide:
+  {
+    "name": (string) customer name,
+    "phone": (string) 11 digit customer phone number (e.g. 01968402925),
+    "address": (string) full delivery address,
+    "area": (string) "Inside Dhaka" or "Outside Dhaka",
+    "shipping_cost": (number) ${insideRate} for Inside Dhaka or ${outsideRate} for Outside,
+    "product_id": (number) ID of the product from context or search,
+    "quantity": (number) quantity ordered (default 1),
+    "price": (number) unit price of the product
+  }
+
+--- ORDER & CONVERSATION RULES ---
+1. MEMORY & CONTEXT AWARENESS:
+   - Carefully read the "RECENT CONVERSATION HISTORY" above! Never forget what the customer already told you!
+   - If the customer already gave their name/number/address in a previous message, DO NOT ask for them again!
+   - If they sent a product link earlier, REMEMBER that product! Don't ask "which product" again!
+
+2. ORDER TAKING & AUTOMATIC PLACEMENT:
+   - When you have customer's Name, Phone Number, Delivery Address and Product:
+     * Set action to "place_order" with the "order_data" fields!
+     * In "reply_text", confirm that their order has been placed successfully via Cash on Delivery, mention the total amount (Product price + delivery ${curr}${insideRate}/${curr}${outsideRate}), and inform them our team will contact them shortly for dispatch!
+   - If any info is still missing (e.g. only address given, but no phone number), politely ask ONLY for the missing piece.
+3. DELIVERY & PAYMENT:
+   - Delivery Charges: Inside Dhaka ${curr}${insideRate}, Outside Dhaka ${curr}${outsideRate}.
+   - Payment: Cash on Delivery (COD).
+${trackUrl || hotline ? `4. ORDER TRACKING & SUPPORT:
+   - ${trackUrl ? `Tracking link: ${trackUrl}` : ''} ${hotline ? `| Hotline: ${hotline}` : ''}` : ''}`;
+                } else if (customApi) {
+                    if (customApi.instructions) {
+                        agentInstructions += `\n\n--- BUSINESS & CUSTOM API GUIDELINES ---\n${customApi.instructions}\n`;
+                    }
+                    if (customApi.action_endpoint) {
+                        const actName = customApi.action_name || 'custom_action';
+                        agentInstructions += `
+- "action": (string) If the user requested an action/operation and all required details are gathered, return "${actName}". Otherwise return null.
+- "action_payload": (object or null) Parameters/data to send to the action endpoint.`;
+                    } else {
+                        agentInstructions += `\n- "action": (string) Always null.`;
+                    }
+                } else {
+                    agentInstructions += `\n- "action": (string) Always null.`;
+                }
+
                 if (chatbot.enable_human_handoff) {
                     agentInstructions += `\n- "needs_handoff": (boolean) Set to true ONLY if the user is frustrated, angry, explicitly asks for a human agent, or if you cannot resolve their issue. Otherwise false.`;
                 } else {
@@ -490,12 +767,10 @@ export const sendAutomatedReply = async (params) => {
                 }
 
                 if (chatbot.enable_google_meet) {
-                    agentInstructions += `\n- "action": (string) If the user explicitly asks for a meeting, a video call, or to schedule a call, return "generate_google_meet". Otherwise return null.`;
-                } else {
-                    agentInstructions += `\n- "action": (string) Always null.`;
+                    agentInstructions += `\n- If the user explicitly asks for a meeting or call, action can be "generate_google_meet".`;
                 }
 
-                const fullPrompt = `${chatbot.system_prompt || ''}${agentInstructions}\n\nCustomer: ${incomingText}`;
+                const fullPrompt = `${chatbot.system_prompt || ''}${liveContext ? `\n\n--- REAL-TIME STORE CONTEXT ---\n${liveContext}\n` : ''}${recentHistoryText ? `\n\n--- RECENT CONVERSATION HISTORY ---\n${recentHistoryText}\n` : ''}${agentInstructions}\n\nCustomer: ${incomingText}`;
 
                 let aiResponseText = await callAIModel(userId, chatbot.ai_model, chatbot.api_key, fullPrompt);
                 let aiResponseObj;
@@ -518,6 +793,7 @@ export const sendAutomatedReply = async (params) => {
                     if (io) {
                         io.emit('agent:escalation', {
                             contact_id: contactDoc._id.toString(),
+                            workspace_id: contactDoc.workspace_id?.toString() || null,
                             user_id: userId,
                             message: "AI Agent requested human handoff",
                             timestamp: new Date().toISOString()
@@ -554,6 +830,51 @@ export const sendAutomatedReply = async (params) => {
                         }
                     } catch (meetErr) {
                         console.error('[Chatbot] Error generating Google Meet link:', meetErr);
+                    }
+                }
+
+                if (ecommerce && aiResponseObj.action === 'place_order' && aiResponseObj.order_data) {
+                    try {
+                        const od = aiResponseObj.order_data;
+                        console.log('[Ecommerce Chatbot] Placing automatic order:', od);
+                        const orderRes = await placeEcommerceOrder(ecommerce, {
+                            name: od.name || contactDoc.name || 'Customer',
+                            phone: od.phone || contactDoc.phone,
+                            address: od.address,
+                            shipping_cost: od.shipping_cost || ecommerce.shipping_inside_dhaka || 80,
+                            products: [
+                                {
+                                    product_id: od.product_id,
+                                    quantity: od.quantity || 1,
+                                    price: od.price
+                                }
+                            ],
+                            notes: `Ordered via WhatsApp AI Chatbot`
+                        });
+
+                        if (orderRes.success && orderRes.order) {
+                            const orderNum = orderRes.order.order_number || orderRes.order.id;
+                            finalReplyText += `\n\n🎉 আপনার অর্ডারটি সফলভাবে গ্রহণ করা হয়েছে! \nঅর্ডার নম্বর: #${orderNum} ${ecommerce.order_track_url ? `\nট্র্যাকিং লিংক: ${ecommerce.order_track_url}` : ''}`;
+                        }
+                    } catch (orderErr) {
+                        console.error('[Ecommerce Chatbot] Error executing placeEcommerceOrder:', orderErr);
+                    }
+                }
+
+                if (customApi && customApi.action_endpoint && aiResponseObj.action === (customApi.action_name || 'custom_action') && aiResponseObj.action_payload) {
+                    try {
+                        console.log(`[Custom API Chatbot] Executing action ${customApi.action_name || 'custom_action'}:`, aiResponseObj.action_payload);
+                        const actionRes = await executeCustomApiAction(customApi, {
+                            ...aiResponseObj.action_payload,
+                            contact_id: contactDoc._id,
+                            contact_name: contactDoc.name,
+                            contact_phone: contactDoc.phone
+                        });
+                        if (actionRes.success) {
+                            console.log('[Custom API Chatbot] Action executed successfully:', actionRes.data);
+                        }
+                    } catch (customActionErr) {
+                        console.error('[Custom API Chatbot] Action error:', customActionErr);
                     }
                 }
 

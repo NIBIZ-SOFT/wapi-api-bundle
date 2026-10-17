@@ -6,6 +6,12 @@ const replyMaterialSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
+    workspace_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Workspace',
+        index: true,
+        default: null
+    },
     waba_id: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'WhatsappWaba'

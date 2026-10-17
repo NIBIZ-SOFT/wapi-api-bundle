@@ -42,7 +42,7 @@ const buildSystemPrompt = (data) => {
 export const createChatbot = async (req, res) => {
     try {
         const userId = req.user.owner_id;
-        const { name, ai_model, api_key, business_name, business_description, enable_human_handoff, message_limit, enable_google_meet, voice_settings, handoff_keywords, handoff_message, tone } = req.body;
+        const { name, ai_model, api_key, business_name, business_description, enable_human_handoff, message_limit, enable_google_meet, voice_settings, handoff_keywords, handoff_message, tone, ecommerce, category, custom_api } = req.body;
 
         if (!name || !ai_model || !api_key) {
             return res.status(400).json({ success: false, message: 'name, ai_model, and api_key are required' });
@@ -58,8 +58,12 @@ export const createChatbot = async (req, res) => {
 
         const system_prompt = buildSystemPrompt({ business_name, business_description, tone });
 
+        const workspaceId = req.headers['x-workspace-id'] || req.body.workspace_id || req.query.workspace_id;
+        const validWorkspaceId = (workspaceId && mongoose.Types.ObjectId.isValid(workspaceId)) ? new mongoose.Types.ObjectId(workspaceId) : null;
+
         const chatbot = await Chatbot.create({
             user_id: req.user.owner_id,
+            workspace_id: validWorkspaceId,
             created_by: req.user.id,
             name,
             ai_model,
@@ -73,7 +77,10 @@ export const createChatbot = async (req, res) => {
             voice_settings,
             handoff_keywords,
             handoff_message,
-            tone
+            tone,
+            ecommerce,
+            category: category || 'customer_support',
+            custom_api: custom_api || {}
         });
 
         return res.status(201).json({
@@ -96,13 +103,30 @@ export const getAllChatbots = async (req, res) => {
         const userId = req.user.owner_id;
         const { search } = req.query;
 
+        const workspaceId = req.headers['x-workspace-id'] || req.query.workspace_id;
         const query = { user_id: userId, deleted_at: null };
 
-        if (search) {
+        if (workspaceId && mongoose.Types.ObjectId.isValid(workspaceId)) {
             query.$or = [
+                { workspace_id: new mongoose.Types.ObjectId(workspaceId) },
+                { workspace_id: null }
+            ];
+        }
+
+        if (search) {
+            const searchCondition = [
                 { name: { $regex: search, $options: 'i' } },
                 { business_name: { $regex: search, $options: 'i' } }
             ];
+            if (query.$or) {
+                query.$and = [
+                    { $or: query.$or },
+                    { $or: searchCondition }
+                ];
+                delete query.$or;
+            } else {
+                query.$or = searchCondition;
+            }
         }
 
         const chatbots = await Chatbot.find(query)
@@ -168,10 +192,14 @@ export const updateChatbot = async (req, res) => {
             });
         }
 
-        const allowedUpdates = ['name', 'ai_model', 'api_key', 'status', 'enable_human_handoff', 'message_limit', 'enable_google_meet', 'voice_settings', 'handoff_keywords', 'handoff_message', 'tone'];
+        const allowedUpdates = ['name', 'ai_model', 'api_key', 'status', 'enable_human_handoff', 'message_limit', 'enable_google_meet', 'voice_settings', 'handoff_keywords', 'handoff_message', 'tone', 'workspace_id', 'ecommerce', 'system_prompt', 'raw_training_text', 'category', 'custom_api'];
         allowedUpdates.forEach(field => {
             if (updateData[field] !== undefined) {
-                chatbot[field] = updateData[field];
+                if (field === 'workspace_id') {
+                    chatbot[field] = (updateData[field] && mongoose.Types.ObjectId.isValid(updateData[field])) ? new mongoose.Types.ObjectId(updateData[field]) : null;
+                } else {
+                    chatbot[field] = updateData[field];
+                }
             }
         });
 

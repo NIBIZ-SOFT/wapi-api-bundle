@@ -8,6 +8,7 @@ import { WhatsappConnection, EcommerceProduct } from '../models/index.js';
 import { assignChatToAgent as assignChatToAgentFromChat } from './chat.controller.js';
 import paymentLinkService from '../services/payment-link.service.js';
 import mongoose from 'mongoose';
+import { getWhatsAppTypeFromMime } from '../utils/uploadMediaToWhatsapp.js';
 
 const processedAuthCodes = new Set();
 
@@ -1242,15 +1243,22 @@ export const sendMessage = async (req, res) => {
 
 
     if (totalMediaCount > 1) {
-      const contact = await Contact.findById(contactId);
+      const contact = contactDoc || (contactId ? await Contact.findById(contactId) : null);
+      if (!contact) {
+        return res.status(404).json({ success: false, error: 'Contact not found' });
+      }
       return await sendMultipleMediaUrls({
         userId: senderId,
         contact,
+        contactId: contact._id.toString(),
         whatsappPhoneNumber,
-        mediaUrls,
+        whatsappPhoneNumberId,
+        uploadedFiles,
+        mediaUrls: parsedMediaUrls,
         messageText,
         providerType: provider,
-        connectionId
+        connectionId,
+        replyMessageId
       }, res);
     }
 
@@ -4496,31 +4504,58 @@ export const setPrimaryPhoneNumber = async (req, res) => {
 };
 
 const sendMultipleMediaUrls = async (params, res) => {
-  const { userId, contact, whatsappPhoneNumber, mediaUrls, messageText, providerType, connectionId } = params;
+  const {
+    userId,
+    contact,
+    contactId,
+    whatsappPhoneNumber,
+    whatsappPhoneNumberId,
+    uploadedFiles = [],
+    mediaUrls = [],
+    messageText,
+    providerType,
+    connectionId,
+    replyMessageId
+  } = params;
 
   try {
     const sentMessages = [];
-    const failedUrls = [];
+    const failedItems = [];
+    const totalCount = (uploadedFiles?.length || 0) + (mediaUrls?.length || 0);
+
+    let activePhoneNumber = whatsappPhoneNumber;
+    if (!activePhoneNumber && whatsappPhoneNumberId) {
+      activePhoneNumber = await WhatsappPhoneNumber.findById(whatsappPhoneNumberId)
+        .populate('waba_id')
+        .lean();
+    }
+
+    let targetContact = contact;
+    if (!targetContact && contactId) {
+      targetContact = await Contact.findById(contactId).lean();
+    }
+
+    const recipientNumber = targetContact?.whatsapp_bsuid || targetContact?.whatsapp_username || targetContact?.phone_number;
 
     // 1. Process uploaded files first
     for (let i = 0; i < uploadedFiles.length; i++) {
       const file = uploadedFiles[i];
       try {
         const mediaType = getWhatsAppTypeFromMime(file.mimetype) || 'document';
-
-        const fileCaption = messageText || undefined;
+        const fileCaption = messageText ? (totalCount > 1 ? `${messageText} (${i + 1}/${totalCount})` : messageText) : undefined;
+        const currentReplyMessageId = i === 0 ? replyMessageId : undefined;
 
         const messageParams = {
-          contactId: contact._id,
-          recipientNumber: contact.phone_number,
+          contactId: targetContact?._id,
+          recipientNumber: recipientNumber,
           messageText: fileCaption,
           messageType: mediaType,
           file,
           providerType,
           connectionId,
-          whatsappPhoneNumber,
+          whatsappPhoneNumber: activePhoneNumber,
           whatsappPhoneNumberId,
-          replyMessageId
+          replyMessageId: currentReplyMessageId
         };
 
         const result = await unifiedWhatsAppService.sendMessage(userId, messageParams);
@@ -4542,22 +4577,24 @@ const sendMultipleMediaUrls = async (params, res) => {
     // 2. Process media URLs
     for (let i = 0; i < mediaUrls.length; i++) {
       const mediaUrl = mediaUrls[i];
-      const isLast = i === mediaUrls.length - 1;
+      const currentIdx = (uploadedFiles?.length || 0) + i;
 
       try {
         const mediaType = getMediaTypeFromUrl(mediaUrl);
-
-        const currentIdx = uploadedFiles.length + i;
-        const fileCaption = messageText || undefined;
+        const fileCaption = messageText ? (totalCount > 1 ? `${messageText} (${currentIdx + 1}/${totalCount})` : messageText) : undefined;
+        const currentReplyMessageId = currentIdx === 0 ? replyMessageId : undefined;
 
         const messageParams = {
-          recipientNumber: contact.phone_number,
+          contactId: targetContact?._id,
+          recipientNumber: recipientNumber,
           messageText: fileCaption,
           messageType: mediaType,
           mediaUrl: mediaUrl,
           providerType,
           connectionId,
-          whatsappPhoneNumber
+          whatsappPhoneNumber: activePhoneNumber,
+          whatsappPhoneNumberId,
+          replyMessageId: currentReplyMessageId
         };
 
         const result = await unifiedWhatsAppService.sendMessage(userId, messageParams);
@@ -4569,7 +4606,7 @@ const sendMultipleMediaUrls = async (params, res) => {
 
       } catch (error) {
         console.error(`Error sending media URL ${mediaUrl}:`, error);
-        failedUrls.push({
+        failedItems.push({
           url: mediaUrl,
           error: error.message
         });
@@ -4579,8 +4616,8 @@ const sendMultipleMediaUrls = async (params, res) => {
     if (sentMessages.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'No media URLs were successfully sent',
-        failed: failedUrls
+        error: 'No media files were successfully sent',
+        failed: failedItems
       });
     }
 
@@ -4588,11 +4625,13 @@ const sendMultipleMediaUrls = async (params, res) => {
       success: true,
       message: `Successfully sent ${sentMessages.length} media files`,
       data: {
-        totalUrls: mediaUrls.length,
+        totalCount,
+        totalUrls: totalCount,
         sentMessages: sentMessages.length,
-        failedUrls: failedUrls.length,
+        failedCount: failedItems.length,
+        failedUrls: failedItems.length,
         sent: sentMessages,
-        failed: failedUrls
+        failed: failedItems
       }
     });
 
