@@ -601,26 +601,35 @@ export const resolveProductImageUrl = (product, ecommerceConfig) => {
     img = img.trim();
     if (!img) return null;
 
-    let baseApi = (ecommerceConfig?.api_base_url || '').replace(/\/$/, '');
-    if (!baseApi && ecommerceConfig?.store_url) {
+    // 1. Resolve dynamic base URL for product images:
+    // Priority: image_base_url -> api_base_url -> store_url (derived backend domain)
+    let imageBase = (ecommerceConfig?.image_base_url || ecommerceConfig?.api_base_url || '').replace(/\/$/, '');
+    if (!imageBase && ecommerceConfig?.store_url) {
         const storeDomain = ecommerceConfig.store_url.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-        baseApi = `https://backend.${storeDomain}`;
+        imageBase = `https://backend.${storeDomain}`;
     }
-    if (!baseApi) baseApi = 'https://backend.valokichu.com';
+    if (imageBase && !imageBase.startsWith('http://') && !imageBase.startsWith('https://')) {
+        imageBase = `https://${imageBase}`;
+    }
 
-    // If it's a relative path or filename
+    // 2. If it's a relative path or filename
     if (!img.startsWith('http://') && !img.startsWith('https://')) {
+        if (!imageBase) return null;
         if (img.startsWith('/')) {
-            img = `${baseApi}${img}`;
+            img = `${imageBase}${img}`;
         } else if (img.startsWith('storage/')) {
-            img = `${baseApi}/${img}`;
+            img = `${imageBase}/${img}`;
         } else {
-            img = `${baseApi}/storage/products/${img}`;
+            img = `${imageBase}/storage/products/${img}`;
         }
     }
 
-    // Replace localhost or 127.0.0.1 with backend API URL
-    img = img.replace(/https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, baseApi);
+    // 3. If image URL returned by store API has localhost or 127.0.0.1, replace with dynamic base
+    if (/https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(img)) {
+        if (imageBase) {
+            img = img.replace(/https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, imageBase);
+        }
+    }
 
     return img;
 };

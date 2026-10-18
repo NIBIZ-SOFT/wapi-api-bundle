@@ -117,6 +117,7 @@ const chatbotSchema = new mongoose.Schema(
             enabled: { type: Boolean, default: false },
             store_url: { type: String, trim: true, default: '' },
             api_base_url: { type: String, trim: true, default: '' },
+            image_base_url: { type: String, trim: true, default: '' },
             product_search_path: { type: String, trim: true, default: '' },
             product_detail_path: { type: String, trim: true, default: '' },
             order_checkout_path: { type: String, trim: true, default: '' },
