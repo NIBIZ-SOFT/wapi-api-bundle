@@ -601,23 +601,38 @@ export const cleanReplyUrlsAndFormatting = (text) => {
     // 1. Separate numbered list items into distinct lines if bunched together
     cleaned = cleaned.replace(/([^\n])\s+([১-৯0-9]+\.\s+)/g, '$1\n\n$2');
 
-    // 2. Remove surrounding parentheses around links like "(লিংক: https://...)" or "(https://...)"
+    // 2. Unescape backslashes before parens or brackets (e.g. \) or \])
+    cleaned = cleaned.replace(/\\([()[\]])/g, '$1');
+
+    // 3. Convert markdown links [text](url) -> url or text url (stripping any malformed trailing brackets/parens)
+    cleaned = cleaned.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, (match, anchor, url) => {
+        const cleanAnchor = anchor.replace(/[)\]]+$/, '').trim();
+        const cleanUrl = url.replace(/[)\]]+$/, '').trim();
+        if (cleanAnchor === cleanUrl || cleanAnchor.startsWith('http')) {
+            return cleanUrl;
+        }
+        return `${cleanAnchor} ${cleanUrl}`;
+    });
+
+    // 4. Remove surrounding parentheses around links like "(লিংক: https://...)" or "(https://...)"
     cleaned = cleaned.replace(/\(([^)]*?)(https?:\/\/[^\s)]+)\)/gi, (match, prefix, url) => {
         const cleanPrefix = prefix ? prefix.trim() + ' ' : '';
         return ` ${cleanPrefix}${url.trim()} `;
     });
 
-    // 3. Remove surrounding brackets around links like "[লিংক: https://...]" or "[https://...]"
+    // 5. Remove surrounding brackets around links like "[লিংক: https://...]" or "[https://...]"
     cleaned = cleaned.replace(/\[([^\]]*?)(https?:\/\/[^\s\]]+)\]/gi, (match, prefix, url) => {
         const cleanPrefix = prefix ? prefix.trim() + ' ' : '';
         return ` ${cleanPrefix}${url.trim()} `;
     });
 
-    // 4. Strip any trailing parenthesis or bracket directly stuck to a URL
-    cleaned = cleaned.replace(/(https?:\/\/[^\s)]+)\)+/g, '$1');
-    cleaned = cleaned.replace(/(https?:\/\/[^\s\]]+)\]+/g, '$1');
+    // 6. Strip any trailing parenthesis or bracket directly attached to a URL
+    cleaned = cleaned.replace(/(https?:\/\/[^\s)\]]+)[)\]]+/gi, '$1');
 
-    // 5. Clean up extra spaces on lines
+    // 7. Put closing Bengali sentence after a URL on a clean separate line
+    cleaned = cleaned.replace(/(https?:\/\/[^\s]+)\s+([ক-হ])/gi, '$1\n\n$2');
+
+    // 8. Clean up extra spaces on lines
     cleaned = cleaned.split('\n').map(line => line.replace(/[ \t]+/g, ' ').trim()).join('\n');
 
     return cleaned.trim();
@@ -996,10 +1011,12 @@ The JSON must have the following keys:
 
 4. PRODUCT LISTING & URL FORMATTING:
    - When suggesting products or sharing links, put EACH item on its own separate line.
-   - CRITICAL: NEVER wrap URLs inside parentheses like (https://...) or brackets [https://...]!
-   - CRITICAL: NEVER attach ")" or any punctuation directly to the end of a URL! In WhatsApp, any trailing ")" breaks the clickable link and causes 404 errors!
+   - CRITICAL: Output ONLY raw plain-text URLs! WhatsApp does NOT support markdown links!
+   - NEVER use markdown link formatting like [Product](https://...) or [https://...](https://...)!
+   - NEVER wrap URLs inside parentheses like (https://...) or brackets [https://...]!
+   - NEVER attach ")" or "]" or any punctuation directly to the end of a URL! Trailing characters break the link and cause 404 errors!
    - Always format product listings with clean line breaks, for example:
-     ১. [Product Name] - [Price]
+     ১. Product Name - Price
      লিংক: https://store.com/products/slug
 ${trackUrl || hotline ? `5. ORDER TRACKING & SUPPORT:
    - ${trackUrl ? `Tracking link: ${trackUrl}` : ''} ${hotline ? `| Hotline: ${hotline}` : ''}` : ''}`;
