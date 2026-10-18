@@ -126,7 +126,8 @@ const chatbotSchema = new mongoose.Schema(
             shipping_inside_dhaka: { type: Number, default: 0 },
             shipping_outside_dhaka: { type: Number, default: 0 },
             currency: { type: String, trim: true, default: '' },
-            payment_methods: { type: [String], default: [] }
+            payment_methods: { type: [String], default: [] },
+            store_rules: { type: String, trim: true, default: '' }
         },
         deleted_at: {
             type: Date,

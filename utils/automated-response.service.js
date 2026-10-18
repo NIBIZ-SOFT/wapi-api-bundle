@@ -1139,7 +1139,7 @@ The JSON must have the following keys:
    - NEVER use markdown link formatting like [Product](https://...) or [https://...](https://...)!
    - NEVER wrap URLs inside parentheses like (https://...) or brackets [https://...]!
    - NEVER attach ")" or "]" or any punctuation directly to the end of a URL! Trailing characters break the link and cause 404 errors!
-   - CRITICAL URL ACCURACY: Store product links ALWAYS start with "/products/" (PLURAL) and MUST contain the EXACT full slug with its ID number (e.g. https://valokichu.com/products/item-name-12345). NEVER use "/product/" (singular) and NEVER invent or strip numbers from slugs!
+   - CRITICAL URL ACCURACY: Store product links ALWAYS start with "/products/" (PLURAL) and MUST contain the EXACT full slug with its ID number (e.g. ${ecommerce.store_url ? `${ecommerce.store_url.replace(/\/$/, '')}/products/item-name-12345` : 'https://example.com/products/item-name-12345'}). NEVER use "/product/" (singular) and NEVER invent or strip numbers from slugs!
    - CRITICAL ANTI-HALLUCINATION: If a product is NOT present in [ACTIVE PRODUCT IN THIS CONVERSATION] or [LIVE SEARCH RESULTS FROM STORE], you DO NOT have it! NEVER invent a fake product URL, price, or product! Politely reply that you could not find the item in the store catalog and ask for the exact link.
    - Always format product listings with clean line breaks, for example:
      ১. Product Name - Price
@@ -1151,7 +1151,7 @@ The JSON must have the following keys:
    - NEVER use informal words like "ভাই" (bhai), "ভাইয়া" (bhaiya), "আপু" (apu), "দাদা", "দোস্ত", etc.!
    - Always use formal Bengali honorifics like "আপনি", "আপনার", "করবেন", "জানাবেন", etc.
 ${trackUrl || hotline ? `6. ORDER TRACKING & SUPPORT:
-   - ${trackUrl ? `Tracking link: ${trackUrl}` : ''} ${hotline ? `| Hotline: ${hotline}` : ''}` : ''}`;
+   - ${trackUrl ? `Tracking link: ${trackUrl}` : ''} ${hotline ? `| Hotline: ${hotline}` : ''}` : ''}${ecommerce.store_rules ? `\n\n7. CUSTOM STORE RULES & POLICIES:\n${ecommerce.store_rules}` : ''}`;
                 } else if (customApi) {
                     if (customApi.instructions) {
                         agentInstructions += `\n\n--- BUSINESS & CUSTOM API GUIDELINES ---\n${customApi.instructions}\n`;
