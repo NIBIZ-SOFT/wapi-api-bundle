@@ -593,6 +593,38 @@ export const resolveProductVariation = (productDetails, userText, aiOrderData) =
     };
 };
 
+export const resolveProductImageUrl = (product, ecommerceConfig) => {
+    if (!product) return null;
+    let img = product.image_url || product.image || (Array.isArray(product.gallery_image_urls) && product.gallery_image_urls.length > 0 ? product.gallery_image_urls[0] : null);
+    if (!img || typeof img !== 'string') return null;
+
+    img = img.trim();
+    if (!img) return null;
+
+    let baseApi = (ecommerceConfig?.api_base_url || '').replace(/\/$/, '');
+    if (!baseApi && ecommerceConfig?.store_url) {
+        const storeDomain = ecommerceConfig.store_url.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+        baseApi = `https://backend.${storeDomain}`;
+    }
+    if (!baseApi) baseApi = 'https://backend.valokichu.com';
+
+    // If it's a relative path or filename
+    if (!img.startsWith('http://') && !img.startsWith('https://')) {
+        if (img.startsWith('/')) {
+            img = `${baseApi}${img}`;
+        } else if (img.startsWith('storage/')) {
+            img = `${baseApi}/${img}`;
+        } else {
+            img = `${baseApi}/storage/products/${img}`;
+        }
+    }
+
+    // Replace localhost or 127.0.0.1 with backend API URL
+    img = img.replace(/https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, baseApi);
+
+    return img;
+};
+
 export const formatProductContext = (product, ecommerceConfig) => {
     if (!product) return '';
     const curr = ecommerceConfig?.currency || '৳';
@@ -618,6 +650,8 @@ export const formatProductContext = (product, ecommerceConfig) => {
         variationText = `\n- Available Variations (Colors & Sizes):\n${varLines}`;
     }
 
+    const imgUrl = resolveProductImageUrl(product, ecommerceConfig);
+
     return `[ACTIVE PRODUCT IN THIS CONVERSATION]:
 - Product ID: ${product.id}
 - Product Name: ${product.name}
@@ -625,7 +659,7 @@ export const formatProductContext = (product, ecommerceConfig) => {
 - Regular Price: ${curr}${product.price}
 - Offer / Sale Price: ${curr}${product.sale_price || product.price}
 - Link: ${ecommerceConfig?.store_url ? `${ecommerceConfig.store_url.replace(/\/$/, '')}/products/${product.slug}` : product.slug}${variationText}
-- Description: ${cleanDesc}`;
+${imgUrl ? '- Product Image: Attached automatically to this message\n' : ''}- Description: ${cleanDesc}`;
 };
 
 export const cleanReplyUrlsAndFormatting = (text, activeProduct = null) => {
@@ -771,8 +805,11 @@ export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, rec
 ${productList}
 * INSTRUCTION: Use these real product IDs, names, and prices. When listing products, put EACH product on a new line. Output ONLY plain text links like: লিংক: https://store.com/products/slug`);
 
-                // If not already matched by slug, load the highest-scoring candidate as the active product
-                if (!matchedProduct && topProducts[0]?.slug) {
+                // If not already matched by direct link in current message, prefer high-scoring candidate as active product
+                const topScore = topProducts[0]?.name ? scoreProductMatch(topProducts[0].name, incomingText) : 0;
+                const incomingHasProductLink = !!incomingMatch;
+
+                if ((!matchedProduct || (!incomingHasProductLink && topScore >= 3)) && topProducts[0]?.slug) {
                     try {
                         const topDetail = await getEcommerceLiveProduct(ecommerceConfig, topProducts[0].slug);
                         matchedProduct = topDetail || topProducts[0];
@@ -1303,6 +1340,17 @@ ${trackUrl || hotline ? `6. ORDER TRACKING & SUPPORT:
 
                 let messageTypeToSend = 'text';
                 let messageFile = null;
+                let mediaUrlToSend = null;
+
+                // Resolve product image if available from the matched product
+                if (activeMatchedProduct) {
+                    const productImg = resolveProductImageUrl(activeMatchedProduct, ecommerce);
+                    if (productImg) {
+                        messageTypeToSend = 'image';
+                        mediaUrlToSend = productImg;
+                        console.log(`[Chatbot] Attaching product image for "${activeMatchedProduct.name}": ${mediaUrlToSend}`);
+                    }
+                }
 
                 if (chatbot.voice_settings && chatbot.voice_settings.enabled) {
                     const voiceProvider = chatbot.voice_settings.provider || null;
@@ -1317,23 +1365,115 @@ ${trackUrl || hotline ? `6. ORDER TRACKING & SUPPORT:
                             mimetype: 'audio/mpeg',
                             originalname: ttsResult.fileName || 'audio_message.mp3'
                         };
+                        mediaUrlToSend = null;
                     }
                 }
 
-                if (isOmnichannel) {
-                   await sendOmnichannelMessageHelper({
-                        contactDoc,
-                        messageType: 'text',
-                        text: finalReplyText
-                    });
-                } else {
-                    await unifiedWhatsAppService.sendMessage(userId, {
-                        recipientNumber: params.senderNumber,
-                        messageText: finalReplyText,
-                        messageType: messageTypeToSend,
-                        file: messageFile,
-                        whatsappPhoneNumberId
-                    });
+                try {
+                    if (messageTypeToSend === 'image' && mediaUrlToSend) {
+                        if (finalReplyText.length <= 1020) {
+                            if (isOmnichannel) {
+                                await sendOmnichannelMessageHelper({
+                                    contactDoc,
+                                    messageType: 'image',
+                                    text: finalReplyText,
+                                    fileUrl: mediaUrlToSend
+                                });
+                            } else {
+                                await unifiedWhatsAppService.sendMessage(userId, {
+                                    recipientNumber: params.senderNumber,
+                                    messageText: finalReplyText,
+                                    messageType: 'image',
+                                    mediaUrl: mediaUrlToSend,
+                                    whatsappPhoneNumberId
+                                });
+                            }
+                        } else {
+                            // If caption exceeds WhatsApp 1024 char limit, send image first then full reply text
+                            const shortCaption = `${activeMatchedProduct.name || 'Product'} — ${ecommerce?.currency || '৳'}${activeMatchedProduct.sale_price || activeMatchedProduct.price || ''}`.trim();
+                            if (isOmnichannel) {
+                                await sendOmnichannelMessageHelper({
+                                    contactDoc,
+                                    messageType: 'image',
+                                    text: shortCaption,
+                                    fileUrl: mediaUrlToSend
+                                });
+                                await sendOmnichannelMessageHelper({
+                                    contactDoc,
+                                    messageType: 'text',
+                                    text: finalReplyText
+                                });
+                            } else {
+                                await unifiedWhatsAppService.sendMessage(userId, {
+                                    recipientNumber: params.senderNumber,
+                                    messageText: shortCaption,
+                                    messageType: 'image',
+                                    mediaUrl: mediaUrlToSend,
+                                    whatsappPhoneNumberId
+                                });
+                                await unifiedWhatsAppService.sendMessage(userId, {
+                                    recipientNumber: params.senderNumber,
+                                    messageText: finalReplyText,
+                                    messageType: 'text',
+                                    whatsappPhoneNumberId
+                                });
+                            }
+                        }
+                    } else if (messageTypeToSend === 'audio') {
+                        if (isOmnichannel) {
+                            await sendOmnichannelMessageHelper({
+                                contactDoc,
+                                messageType: 'audio',
+                                text: finalReplyText,
+                                fileUrl: messageFile?.url || null
+                            });
+                        } else {
+                            await unifiedWhatsAppService.sendMessage(userId, {
+                                recipientNumber: params.senderNumber,
+                                messageText: finalReplyText,
+                                messageType: 'audio',
+                                file: messageFile,
+                                whatsappPhoneNumberId
+                            });
+                        }
+                    } else {
+                        if (isOmnichannel) {
+                            await sendOmnichannelMessageHelper({
+                                contactDoc,
+                                messageType: 'text',
+                                text: finalReplyText
+                            });
+                        } else {
+                            await unifiedWhatsAppService.sendMessage(userId, {
+                                recipientNumber: params.senderNumber,
+                                messageText: finalReplyText,
+                                messageType: 'text',
+                                whatsappPhoneNumberId
+                            });
+                        }
+                    }
+                } catch (sendErr) {
+                    console.error('[Chatbot] Error sending message with primary media type:', sendErr);
+                    if (messageTypeToSend !== 'text') {
+                        try {
+                            if (isOmnichannel) {
+                                await sendOmnichannelMessageHelper({
+                                    contactDoc,
+                                    messageType: 'text',
+                                    text: finalReplyText
+                                });
+                            } else {
+                                await unifiedWhatsAppService.sendMessage(userId, {
+                                    recipientNumber: params.senderNumber,
+                                    messageText: finalReplyText,
+                                    messageType: 'text',
+                                    whatsappPhoneNumberId
+                                });
+                            }
+                        } catch (fallbackErr) {
+                            console.error('[Chatbot] Fallback text send also failed:', fallbackErr);
+                        }
+                    }
                 }
 
                 contactDoc.ai_message_count = (contactDoc.ai_message_count || 0) + 1;
