@@ -394,7 +394,7 @@ export const extractSearchQueries = (text) => {
     if (!text || typeof text !== 'string') return [];
     const queries = [];
 
-    // Check quotes first (e.g. “Bangla Vibes” or "Product Name")
+    // 1. Quoted phrases e.g. "Multi-Pocket Casual Backpack"
     const quoteMatches = text.match(/["“'‘]([^"”'’]+)["”'’]/g);
     if (quoteMatches) {
         quoteMatches.forEach(m => {
@@ -403,28 +403,62 @@ export const extractSearchQueries = (text) => {
         });
     }
 
-    const cleanText = text
-        .replace(/\b(hi|hello|salam|assalamu\s+alaikum|kemon\s+achen|bhai|apnader|kache|ki|er|price|dam|koto|ache|ase|dekte|dekhan|chai|order|korbo|amar|lagbe|eta|eita|aita|please|details|bolun|janan|nibo|nibi|size|color|yellow|black|white|red|blue|xl|xxl|m|l|s)\b/gi, ' ')
-        .replace(/[?.,!/\\#"“”'’`~@$%^&*()+=[\]{}|;:<>-]+/g, ' ')
+    // 2. Preserve hyphenated phrases intact (e.g. "Multi-Pocket", "HA-20DX")
+    const hyphenatedWords = text.match(/[a-zA-Z0-9]+-[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*/g);
+    if (hyphenatedWords) {
+        hyphenatedWords.forEach(hw => {
+            if (hw.length > 3) queries.push(hw);
+        });
+    }
+
+    // 3. Stop words in Banglish, Bengali, and English
+    const stopWordsRegex = /\b(hi|hello|salam|assalamu\s+alaikum|kemon\s+achen|bhai|vai|bro|apnader|kache|ki|er|price|dam|koto|ache|ase|asa|achhe|dekte|dekhan|chai|order|korbo|amar|lagbe|eta|eita|aita|ata|oita|please|details|bolun|janan|nibo|nibi|hobe|available|stock|ace|tai|na|ha|ji)\b/gi;
+    const bengaliStopWordsRegex = /[\s]*(আছে|দাম|কত|এইটা|এটা|ওটা|কি|ভাই|আপনাদের|কাছে|দেখান|দেখতে|চাই|অর্ডার|করবো|প্লিজ|বলুন|জানান|নিতে|হবে|স্টক)[\s]*/g;
+
+    const cleanedText = text
+        .replace(stopWordsRegex, ' ')
+        .replace(bengaliStopWordsRegex, ' ')
+        .replace(/[?.,!/\\#"“”'’`~@$%^&*()+=[\]{}|;:<>]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 
-    if (cleanText.length > 2) {
-        queries.push(cleanText);
+    if (cleanedText.length > 2) {
+        queries.push(cleanedText);
     }
 
-    const words = cleanText.split(' ').filter(w => w.length > 1);
+    // 4. Extract distinctive content words (length >= 4 or capitalized)
+    const words = cleanedText.split(' ').filter(w => w.length > 2);
+    const distinctiveWords = [...words].sort((a, b) => {
+        const aCap = /^[A-Z]/.test(a) ? 2 : 0;
+        const bCap = /^[A-Z]/.test(b) ? 2 : 0;
+        return (b.length + bCap) - (a.length + aCap);
+    });
+
+    distinctiveWords.slice(0, 4).forEach(w => queries.push(w));
+
+    // 5. Multi-word phrase combinations
     if (words.length >= 2) {
         queries.push(words.slice(0, 2).join(' '));
-    }
-    if (words.length >= 3) {
-        queries.push(words.slice(0, 3).join(' '));
-    }
-    if (words.length >= 4) {
-        queries.push(words.slice(0, 4).join(' '));
+        if (words.length >= 3) {
+            queries.push(words.slice(1, 3).join(' '));
+        }
     }
 
     return [...new Set(queries.filter(q => q && q.length > 1))];
+};
+
+export const scoreProductMatch = (productName, incomingText) => {
+    if (!productName || !incomingText) return 0;
+    const normName = productName.toLowerCase().replace(/[^a-z0-9]/g, ' ');
+    const normInput = incomingText.toLowerCase().replace(/[^a-z0-9]/g, ' ');
+    const nameWords = normName.split(/\s+/).filter(w => w.length > 2);
+    const inputWords = normInput.split(/\s+/).filter(w => w.length > 2);
+
+    let matches = 0;
+    for (const iw of inputWords) {
+        if (nameWords.includes(iw)) matches++;
+    }
+    return inputWords.length > 0 ? (matches / inputWords.length) : 0;
 };
 
 export const resolveProductVariation = (productDetails, userText, aiOrderData) => {
@@ -594,7 +628,7 @@ export const formatProductContext = (product, ecommerceConfig) => {
 - Description: ${cleanDesc}`;
 };
 
-export const cleanReplyUrlsAndFormatting = (text) => {
+export const cleanReplyUrlsAndFormatting = (text, activeProduct = null) => {
     if (!text || typeof text !== 'string') return text;
     let cleaned = text;
 
@@ -626,20 +660,36 @@ export const cleanReplyUrlsAndFormatting = (text) => {
         return ` ${cleanPrefix}${url.trim()} `;
     });
 
-    // 6. Strip any trailing parenthesis or bracket directly attached to a URL
+    // 6. Fix singular /product/ to plural /products/ in store URLs
+    cleaned = cleaned.replace(/(https?:\/\/[^\s/]+)\/product\/([a-zA-Z0-9_-]+)/gi, '$1/products/$2');
+
+    // 7. If an active product is known and AI generated a link with missing numeric slug suffix, auto-correct the slug
+    if (activeProduct && activeProduct.slug) {
+        const realSlug = activeProduct.slug;
+        const baseSlug = realSlug.replace(/-\d+$/, '');
+        if (baseSlug && baseSlug !== realSlug) {
+            const escapedBase = baseSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const slugRegex = new RegExp(`(\\/products\\/)${escapedBase}(?!-\\d+)`, 'gi');
+            cleaned = cleaned.replace(slugRegex, `$1${realSlug}`);
+        }
+    }
+
+    // 8. Strip any trailing parenthesis or bracket directly attached to a URL
     cleaned = cleaned.replace(/(https?:\/\/[^\s)\]]+)[)\]]+/gi, '$1');
 
-    // 7. Put closing Bengali sentence after a URL on a clean separate line
+    // 9. Put closing Bengali sentence after a URL on a clean separate line
     cleaned = cleaned.replace(/(https?:\/\/[^\s]+)\s+([ক-হ])/gi, '$1\n\n$2');
 
-    // 8. Clean up extra spaces on lines
+    // 10. Clean up extra spaces on lines
     cleaned = cleaned.split('\n').map(line => line.replace(/[ \t]+/g, ' ').trim()).join('\n');
 
     return cleaned.trim();
 };
 
 export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, recentHistoryText = '') => {
-    if (!ecommerceConfig || !ecommerceConfig.enabled || !incomingText || typeof incomingText !== 'string') return '';
+    if (!ecommerceConfig || !ecommerceConfig.enabled || !incomingText || typeof incomingText !== 'string') {
+        return { context: '', matchedProduct: null };
+    }
     const contextParts = [];
 
     const base = (ecommerceConfig.api_base_url || '').replace(/\/$/, '');
@@ -647,12 +697,12 @@ export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, rec
 
     // 1. Check for a direct product link or slug in incoming text first, then recent conversation
     let slug = null;
-    const linkRegex = new RegExp(`(?:${storeDomain.replace('.', '\\.')})?\\/products\\/([a-zA-Z0-9_-]+)`, 'i');
+    const linkRegex = new RegExp(`(?:${storeDomain.replace('.', '\\.')})?\\/products?\\/([a-zA-Z0-9_-]+)`, 'i');
     const incomingMatch = incomingText.match(linkRegex);
     if (incomingMatch && incomingMatch[1]) {
         slug = incomingMatch[1];
     } else if (recentHistoryText) {
-        const historyMatches = [...recentHistoryText.matchAll(new RegExp(`(?:${storeDomain.replace('.', '\\.')})?\\/products\\/([a-zA-Z0-9_-]+)`, 'ig'))];
+        const historyMatches = [...recentHistoryText.matchAll(new RegExp(`(?:${storeDomain.replace('.', '\\.')})?\\/products?\\/([a-zA-Z0-9_-]+)`, 'ig'))];
         if (historyMatches.length > 0) {
             slug = historyMatches[historyMatches.length - 1][1];
         }
@@ -685,32 +735,50 @@ export const getEcommerceLiveContext = async (ecommerceConfig, incomingText, rec
         }
 
         if (queriesToTry.length > 0) {
+            const candidateProducts = [];
+            const seenIds = new Set();
+
             for (const q of queriesToTry) {
                 try {
                     const res = await axios.get(`${base}${searchPath}?search=${encodeURIComponent(q)}`, { timeout: 5000 });
-                    const products = (res.data?.data || []).slice(0, 5);
-                    if (products.length > 0) {
-                        const curr = ecommerceConfig.currency || '৳';
-                        const productList = products.map((p, idx) => 
-                            `${idx + 1}. [ID: ${p.id}] ${p.name} — Price: ${curr}${p.sale_price || p.price}\n   Link: ${ecommerceConfig.store_url ? `${ecommerceConfig.store_url.replace(/\/$/, '')}/products/${p.slug}` : p.slug}`
-                        ).join('\n\n');
-                        contextParts.push(`[LIVE SEARCH RESULTS FROM STORE FOR "${q}"]:
-${productList}
-* INSTRUCTION: Use these real product IDs, names, and prices. When listing products, put EACH product on a new line. NEVER wrap links in parentheses () and NEVER attach ')' to URLs.`);
-
-                        // Load variations for the top matching product if not already loaded
-                        if (!matchedProduct && products[0]?.slug) {
-                            try {
-                                matchedProduct = await getEcommerceLiveProduct(ecommerceConfig, products[0].slug);
-                                if (matchedProduct) {
-                                    contextParts.unshift(formatProductContext(matchedProduct, ecommerceConfig));
-                                }
-                            } catch (e) {}
+                    const products = res.data?.data || [];
+                    for (const p of products) {
+                        if (!seenIds.has(p.id)) {
+                            seenIds.add(p.id);
+                            candidateProducts.push(p);
                         }
-                        break;
                     }
+                    if (candidateProducts.length >= 10) break;
                 } catch (e) {
                     console.error('[Ecommerce Live Context] Error searching products:', e.message);
+                }
+            }
+
+            if (candidateProducts.length > 0) {
+                // Score and rank candidates by relevance to customer text
+                candidateProducts.sort((a, b) => scoreProductMatch(b.name, incomingText) - scoreProductMatch(a.name, incomingText));
+
+                const topProducts = candidateProducts.slice(0, 5);
+                const curr = ecommerceConfig.currency || '৳';
+                const productList = topProducts.map((p, idx) => 
+                    `${idx + 1}. [ID: ${p.id}] ${p.name} — Price: ${curr}${p.sale_price || p.price}\n   Link: ${ecommerceConfig.store_url ? `${ecommerceConfig.store_url.replace(/\/$/, '')}/products/${p.slug}` : p.slug}`
+                ).join('\n\n');
+
+                contextParts.push(`[LIVE SEARCH RESULTS FROM STORE]:
+${productList}
+* INSTRUCTION: Use these real product IDs, names, and prices. When listing products, put EACH product on a new line. Output ONLY plain text links like: লিংক: https://store.com/products/slug`);
+
+                // If not already matched by slug, load the highest-scoring candidate as the active product
+                if (!matchedProduct && topProducts[0]?.slug) {
+                    try {
+                        const topDetail = await getEcommerceLiveProduct(ecommerceConfig, topProducts[0].slug);
+                        matchedProduct = topDetail || topProducts[0];
+                        if (matchedProduct) {
+                            contextParts.unshift(formatProductContext(matchedProduct, ecommerceConfig));
+                        }
+                    } catch (e) {
+                        matchedProduct = topProducts[0];
+                    }
                 }
             }
         }
@@ -724,7 +792,7 @@ ${productList}
         }
     }
 
-    return contextParts.join('\n\n');
+    return { context: contextParts.join('\n\n'), matchedProduct };
 };
 
 export const getCustomApiLiveContext = async (customApiConfig, incomingText) => {
@@ -955,10 +1023,17 @@ export const sendAutomatedReply = async (params) => {
                 }
 
                 let liveContext = '';
+                let activeMatchedProduct = null;
                 const customApi = chatbot.custom_api && chatbot.custom_api.enabled ? chatbot.custom_api : null;
 
                 if (ecommerce) {
-                    liveContext = await getEcommerceLiveContext(ecommerce, incomingText, recentHistoryText);
+                    const liveRes = await getEcommerceLiveContext(ecommerce, incomingText, recentHistoryText);
+                    if (typeof liveRes === 'string') {
+                        liveContext = liveRes;
+                    } else if (liveRes && typeof liveRes === 'object') {
+                        liveContext = liveRes.context || '';
+                        activeMatchedProduct = liveRes.matchedProduct || null;
+                    }
                 } else if (customApi) {
                     liveContext = await getCustomApiLiveContext(customApi, incomingText);
                 }
@@ -1015,6 +1090,8 @@ The JSON must have the following keys:
    - NEVER use markdown link formatting like [Product](https://...) or [https://...](https://...)!
    - NEVER wrap URLs inside parentheses like (https://...) or brackets [https://...]!
    - NEVER attach ")" or "]" or any punctuation directly to the end of a URL! Trailing characters break the link and cause 404 errors!
+   - CRITICAL URL ACCURACY: Store product links ALWAYS start with "/products/" (PLURAL) and MUST contain the EXACT full slug with its ID number (e.g. https://valokichu.com/products/item-name-12345). NEVER use "/product/" (singular) and NEVER invent or strip numbers from slugs!
+   - CRITICAL ANTI-HALLUCINATION: If a product is NOT present in [ACTIVE PRODUCT IN THIS CONVERSATION] or [LIVE SEARCH RESULTS FROM STORE], you DO NOT have it! NEVER invent a fake product URL, price, or product! Politely reply that you could not find the item in the store catalog and ask for the exact link.
    - Always format product listings with clean line breaks, for example:
      ১. Product Name - Price
      লিংক: https://store.com/products/slug
@@ -1212,8 +1289,8 @@ ${trackUrl || hotline ? `5. ORDER TRACKING & SUPPORT:
                     }
                 }
 
-                // Clean any parentheses around links, dangling closing parens, and ensure list formatting
-                finalReplyText = cleanReplyUrlsAndFormatting(finalReplyText);
+                // Clean any parentheses around links, dangling closing parens, ensure list formatting and auto-correct product URLs/slugs
+                finalReplyText = cleanReplyUrlsAndFormatting(finalReplyText, activeMatchedProduct);
 
                 let messageTypeToSend = 'text';
                 let messageFile = null;
