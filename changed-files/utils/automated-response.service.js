@@ -677,10 +677,13 @@ export const cleanReplyUrlsAndFormatting = (text, activeProduct = null) => {
     // 8. Strip any trailing parenthesis or bracket directly attached to a URL
     cleaned = cleaned.replace(/(https?:\/\/[^\s)\]]+)[)\]]+/gi, '$1');
 
-    // 9. Put closing Bengali sentence after a URL on a clean separate line
-    cleaned = cleaned.replace(/(https?:\/\/[^\s]+)\s+([ক-হ])/gi, '$1\n\n$2');
+    // 10. Formal Corporate Tone: Replace informal "ভাই/ভাইয়া" with "স্যার"
+    cleaned = cleaned.replace(/([ক-হঁ-ঢ়A-Za-z]+)\s+(?:ভাই|ভাইয়া|ভাইয়া)(?=[,!\s।?]|$)/gu, '$1 স্যার');
+    cleaned = cleaned.replace(/(?:^|[\s,])(?:ভাই|ভাইয়া|ভাইয়া)(?=[,!\s।?]|$)/gu, (match) => {
+        return match.replace(/ভাই(?:য়া|য়া)?/u, 'স্যার');
+    });
 
-    // 10. Clean up extra spaces on lines
+    // 11. Clean up extra spaces on lines
     cleaned = cleaned.split('\n').map(line => line.replace(/[ \t]+/g, ' ').trim()).join('\n');
 
     return cleaned.trim();
@@ -1095,7 +1098,13 @@ The JSON must have the following keys:
    - Always format product listings with clean line breaks, for example:
      ১. Product Name - Price
      লিংক: https://store.com/products/slug
-${trackUrl || hotline ? `5. ORDER TRACKING & SUPPORT:
+
+5. CORPORATE TONE & ADDRESSING (CRITICAL):
+   - Always maintain a professional, polite, and corporate customer service tone at all times.
+   - Address the customer respectfully as "স্যার" (Sir) or "[Name] স্যার" (e.g. "মোনায়েম স্যার").
+   - NEVER use informal words like "ভাই" (bhai), "ভাইয়া" (bhaiya), "আপু" (apu), "দাদা", "দোস্ত", etc.!
+   - Always use formal Bengali honorifics like "আপনি", "আপনার", "করবেন", "জানাবেন", etc.
+${trackUrl || hotline ? `6. ORDER TRACKING & SUPPORT:
    - ${trackUrl ? `Tracking link: ${trackUrl}` : ''} ${hotline ? `| Hotline: ${hotline}` : ''}` : ''}`;
                 } else if (customApi) {
                     if (customApi.instructions) {
