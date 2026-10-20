@@ -3663,7 +3663,8 @@ export const connectWhatsApp = async (req, res) => {
         is_active: true
       });
 
-      unifiedWhatsAppService.initializeConnection(userId, PROVIDER_TYPES.BAILEY, waba)
+      const syncChat = req.body.sync_chat !== false;
+      unifiedWhatsAppService.initializeConnection(userId, PROVIDER_TYPES.BAILEY, { ...waba.toObject(), sync_chat: syncChat })
         .catch(err => console.error('Error initializing Baileys in background:', err));
 
       return res.json({
@@ -4672,7 +4673,7 @@ export const getBaileysQRCode = async (req, res) => {
   try {
     const userId = req.user.owner_id;
     const { wabaId } = req.params;
-    const syncChat = req.query.sync_chat === 'true';
+    const syncChat = req.query.sync_chat !== 'false';
 
     if (!wabaId) {
       return res.status(400).json({

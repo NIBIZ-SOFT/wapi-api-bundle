@@ -132,7 +132,7 @@ export default class BaileysProvider extends BaseProvider {
             const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
             const { version, isLatest } = await fetchLatestBaileysVersion();
 
-            const syncChat = connectionData.sync_chat;
+            const syncChat = connectionData.sync_chat !== false;
 
             const sock = makeWASocket({
                 version,
@@ -260,16 +260,31 @@ export default class BaileysProvider extends BaseProvider {
                     this.emitStatus(wabaId, 'connected', { phone_number: phoneNumber });
 
                     let phone = await WhatsappPhoneNumber.findOne({ waba_id: wabaId });
+                    const hasActivePrimary = await WhatsappPhoneNumber.exists({
+                        user_id: userId,
+                        is_primary: true,
+                        deleted_at: null,
+                        ...(phone ? { _id: { $ne: phone._id } } : {})
+                    });
+
                     if (!phone) {
-                        const phoneCount = await WhatsappPhoneNumber.countDocuments({ user_id: userId, deleted_at: null });
                         await WhatsappPhoneNumber.create({
                             user_id: userId,
                             waba_id: wabaId,
                             phone_number_id: userJid,
                             display_phone_number: phoneNumber,
                             is_active: true,
-                            is_primary: phoneCount === 0
+                            is_primary: !hasActivePrimary
                         });
+                    } else {
+                        phone.phone_number_id = userJid;
+                        phone.display_phone_number = phoneNumber;
+                        phone.is_active = true;
+                        phone.deleted_at = null;
+                        if (!hasActivePrimary) {
+                            phone.is_primary = true;
+                        }
+                        await phone.save();
                     }
                 }
             });
