@@ -2830,7 +2830,7 @@ export const getRecentChats = async (req, res) => {
           deleted_at: null
         })
           .distinct('contact_id')
-          .then(ids => new Set(ids.map(id => id.toString())));
+          .then(ids => new Set(ids.filter(Boolean).map(id => id.toString())));
         filteredChats = filteredChats.filter(chat => contactIdsWithNotes.has(chat.contact?.id));
       }
 
@@ -2842,7 +2842,7 @@ export const getRecentChats = async (req, res) => {
             { is_seen: false },
             { read_status: 'unread' }
           ]
-        }).then(ids => new Set(ids.map(id => id.toString())));
+        }).then(ids => new Set(ids.filter(Boolean).map(id => id.toString())));
 
         if (filterLastMessageRead === false) {
           filteredChats = filteredChats.filter(chat => contactsWithUnread.has(chat.contact?.id));
@@ -3236,6 +3236,29 @@ export const getRecentChats = async (req, res) => {
       });
     }
 
+    for (const chat of filteredChats) {
+      if (chat.contact && !chat.contact.id && chat.contact.number) {
+        const num = chat.contact.number;
+        const newContact = await Contact.findOneAndUpdate(
+          { phone_number: num, created_by: contactsOwnerId },
+          {
+            $setOnInsert: {
+              name: num,
+              phone_number: num,
+              user_id: contactsOwnerId,
+              created_by: contactsOwnerId,
+              source: 'baileys'
+            },
+            $set: { deleted_at: null }
+          },
+          { upsert: true, new: true }
+        ).lean();
+        if (newContact) {
+          chat.contact.id = newContact._id.toString();
+        }
+      }
+    }
+
     filteredChats = filteredChats.filter(chat => chat.contact && chat.contact.id !== null);
 
     const searchTerm = search && String(search).trim() ? String(search).trim().toLowerCase() : null;
@@ -3275,7 +3298,7 @@ export const getRecentChats = async (req, res) => {
         deleted_at: null
       })
         .distinct('contact_id')
-        .then(ids => new Set(ids.map(id => id.toString())));
+        .then(ids => new Set(ids.filter(Boolean).map(id => id.toString())));
       filteredChats = filteredChats.filter(chat => contactIdsWithNotes.has(chat.contact?.id));
     }
 
@@ -3287,7 +3310,7 @@ export const getRecentChats = async (req, res) => {
           { is_seen: false },
           { read_status: 'unread' }
         ]
-      }).then(ids => new Set(ids.map(id => id.toString())));
+      }).then(ids => new Set(ids.filter(Boolean).map(id => id.toString())));
 
       if (filterLastMessageRead === false) {
         filteredChats = filteredChats.filter(chat => contactsWithUnread.has(chat.contact?.id));

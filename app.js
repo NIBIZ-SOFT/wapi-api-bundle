@@ -35,7 +35,9 @@ app.use(
     origin: function (origin, callback) {
       const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS : [];
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
+      const requestOrigins = origin.split(',').map(o => o.trim());
+      const isAllowed = requestOrigins.every(o => allowedOrigins.includes(o) || allowedOrigins.includes('*'));
+      if (isAllowed || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
         callback(new Error("CORS blocked: " + origin));

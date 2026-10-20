@@ -1821,17 +1821,16 @@ export default class BaileysProvider extends BaseProvider {
 
         const formattedChats = chatsData.map(chat => {
             const contactInfo = contactMap[chat._id];
-            if (!contactInfo) return null;
 
             return {
                 contact: {
-                    id: contactInfo._id || null,
+                    id: contactInfo?._id || null,
                     number: chat._id,
-                    name: contactInfo.name || chat._id,
+                    name: contactInfo?.name || chat._id,
                     avatar: null,
-                    chat_status: contactInfo.chat_status || 'open'
+                    chat_status: contactInfo?.chat_status || 'open'
                 },
-                is_pinned: contactInfo.is_pinned || false,
+                is_pinned: contactInfo?.is_pinned || false,
                 lastMessage: chat.lastMessage ? {
                     id: chat.lastMessage._id.toString(),
                     content: chat.lastMessage.content,
@@ -2020,17 +2019,15 @@ export default class BaileysProvider extends BaseProvider {
                             reactionMessageId = unwrapped?.reactionMessage?.key?.id || null;
                         }
 
-                        if (!fromMe) {
-                            const contactName = msg.pushName || senderNumber;
-                            await Contact.updateOne(
-                                { phone_number: senderNumber, created_by: userId },
-                                {
-                                    $setOnInsert: { user_id: userId, created_by: userId, source: 'baileys' },
-                                    $set: { name: contactName }
-                                },
-                                { upsert: true }
-                            ).catch(() => { });
-                        }
+                        const contactName = (!fromMe && msg.pushName) ? msg.pushName : senderNumber;
+                        await Contact.updateOne(
+                            { phone_number: senderNumber, created_by: userId },
+                            {
+                                $setOnInsert: { user_id: userId, created_by: userId, source: 'baileys', name: contactName, created_at: new Date() },
+                                ...(!fromMe && msg.pushName ? { $set: { name: msg.pushName } } : {})
+                            },
+                            { upsert: true }
+                        ).catch(() => { });
 
                         let fileUrl = null;
 
@@ -2038,6 +2035,7 @@ export default class BaileysProvider extends BaseProvider {
                             sender_number: fromMe ? myNumber : senderNumber,
                             recipient_number: fromMe ? senderNumber : myNumber,
                             user_id: userId,
+                            whatsapp_phone_number_id: phone._id,
                             content: content,
                             message_type: messageType,
                             file_url: fileUrl,
