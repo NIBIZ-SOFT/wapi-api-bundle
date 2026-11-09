@@ -3562,26 +3562,6 @@ export const connectWhatsApp = async (req, res) => {
         }
       }
 
-      let wabaCheck = await WhatsappWaba.findOne({
-        whatsapp_business_account_id,
-        deleted_at: null
-      });
-
-      if (wabaCheck) {
-        if (wabaCheck.user_id.toString() !== userId.toString()) {
-          return res.status(400).json({
-            success: false,
-            error: 'This WhatsApp Business Account is already connected to another user.'
-          });
-        }
-        if (workspace_id && wabaCheck.workspace_id && wabaCheck.workspace_id.toString() !== workspace_id.toString()) {
-          return res.status(400).json({
-            success: false,
-            error: 'This WhatsApp Business Account is already connected to another workspace.'
-          });
-        }
-      }
-
       if (workspace_id) {
         const existingWaba = await WhatsappWaba.findOne({
           workspace_id: workspace_id,
@@ -3595,7 +3575,7 @@ export const connectWhatsApp = async (req, res) => {
       }
 
       let waba = await WhatsappWaba.findOne({
-        user_id: userId,
+        workspace_id: workspace_id,
         whatsapp_business_account_id
       });
 
@@ -3612,6 +3592,7 @@ export const connectWhatsApp = async (req, res) => {
           is_active: true
         });
       } else {
+        waba.user_id = userId;
         waba.access_token = access_token;
         waba.business_id = business_id || waba.business_id;
         waba.workspace_id = workspace_id || waba.workspace_id;
@@ -3799,26 +3780,6 @@ export const getEmbbededSignupConnection = async (req, res) => {
       }
     }
 
-    let wabaCheck = await WhatsappWaba.findOne({
-      whatsapp_business_account_id: signupData.waba_id,
-      deleted_at: null
-    });
-
-    if (wabaCheck) {
-      if (wabaCheck.user_id.toString() !== userId.toString()) {
-        return res.status(400).json({
-          success: false,
-          error: 'This WhatsApp Business Account is already connected to another user.'
-        });
-      }
-      if (workspace_id && wabaCheck.workspace_id && wabaCheck.workspace_id.toString() !== workspace_id.toString()) {
-        return res.status(400).json({
-          success: false,
-          error: 'This WhatsApp Business Account is already connected to another workspace.'
-        });
-      }
-    }
-
     if (workspace_id) {
       const existingWaba = await WhatsappWaba.findOne({
         workspace_id: workspace_id,
@@ -3832,7 +3793,7 @@ export const getEmbbededSignupConnection = async (req, res) => {
     }
 
     let waba = await WhatsappWaba.findOne({
-      user_id: userId,
+      workspace_id: workspace_id,
       whatsapp_business_account_id: signupData.waba_id
     });
     const isNewWaba = !waba;
@@ -3849,9 +3810,10 @@ export const getEmbbededSignupConnection = async (req, res) => {
         is_active: true
       });
     } else {
+      waba.user_id = userId;
       waba.access_token = accessToken;
-      waba.business_id = signupData.business_id,
-        waba.workspace_id = workspace_id || waba.workspace_id;
+      waba.business_id = signupData.business_id;
+      waba.workspace_id = workspace_id || waba.workspace_id;
       waba.name = verified_name || display_phone_number;
       waba.is_active = true;
       waba.deleted_at = null;
