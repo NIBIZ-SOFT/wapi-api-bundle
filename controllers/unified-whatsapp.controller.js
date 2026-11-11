@@ -4067,11 +4067,13 @@ export const getMyPhoneNumbers = async (req, res) => {
 
         let displayName = phone.display_phone_number;
         if (verified_name && verified_name !== 'N/A' && verified_name.trim() !== '') {
-          displayName = verified_name;
+          displayName = phone.display_phone_number ? `${verified_name} (${phone.display_phone_number})` : verified_name;
         }
 
         return {
           display_phone_number: displayName,
+          phone_number: phone.display_phone_number,
+          verified_name: verified_name ?? "N/A",
           id: phone._id,
           is_primary: phone.is_primary
         };
