@@ -912,12 +912,14 @@ async executeFunctionWithCollectedParams(functionDef, params, callLog) {
             console.log(`[TTS] Requesting ElevenLabs TTS for: "${text}"`);
 
             const targetVoice = (voice_id || 'JBFqnCBsd6RMkjVDRZzb').trim();
+            const isBengali = /[\u0980-\u09FF]/.test(text);
+            const ttsModel = isBengali ? 'eleven_multilingual_v2' : (agent.voice_config?.tts_model_id || 'eleven_multilingual_v2');
 
             const response = await axios.post(
                 `https://api.elevenlabs.io/v1/text-to-speech/${targetVoice}?output_format=pcm_16000`,
                 {
                     text,
-                    model_id: 'eleven_turbo_v2'
+                    model_id: ttsModel
                 },
                 {
                     headers: {
