@@ -3571,6 +3571,7 @@ export const connectWhatsApp = async (req, res) => {
         if (existingWaba) {
           await WhatsappPhoneNumber.deleteMany({ waba_id: existingWaba._id });
           await WhatsappWaba.deleteOne({ _id: existingWaba._id });
+          phoneNumber = null;
         }
       }
 
@@ -3654,6 +3655,7 @@ export const connectWhatsApp = async (req, res) => {
         if (existingWaba) {
           await WhatsappPhoneNumber.deleteMany({ waba_id: existingWaba._id });
           await WhatsappWaba.deleteOne({ _id: existingWaba._id });
+          phoneNumber = null;
         }
       }
 
