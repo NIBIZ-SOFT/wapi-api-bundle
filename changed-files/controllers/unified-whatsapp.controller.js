@@ -3604,24 +3604,82 @@ export const connectWhatsApp = async (req, res) => {
         await waba.save();
       }
 
+      // 1. Fetch Verified Name and Quality Rating from Meta
+      let verifiedName = name;
+      let qualityRating = 'GREEN';
+      try {
+        const metaRes = await axios.get(
+          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${phone_number_id}`,
+          {
+            params: { fields: 'verified_name,quality_rating,code_verification_status' },
+            headers: { Authorization: `Bearer ${access_token}` }
+          }
+        );
+        if (metaRes.data?.verified_name) verifiedName = metaRes.data.verified_name;
+        if (metaRes.data?.quality_rating) qualityRating = metaRes.data.quality_rating;
+      } catch (metaErr) {
+        console.warn('[connectWhatsApp] Could not fetch phone details from Meta:', metaErr.message);
+      }
+
+      // 2. Auto-subscribe WABA to app webhooks
+      try {
+        await subscribeWabaToApp(whatsapp_business_account_id, access_token);
+        console.log(`[connectWhatsApp] Successfully subscribed WABA ${whatsapp_business_account_id} to webhooks`);
+      } catch (subErr) {
+        console.warn('[connectWhatsApp] Webhook subscription warning:', subErr.response?.data || subErr.message);
+      }
+
+      // 3. Auto-register phone number with Meta Cloud API
+      try {
+        await axios.post(
+          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${phone_number_id}/register`,
+          {
+            messaging_product: "whatsapp",
+            pin: req.body.pin || "123456"
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${access_token}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`[connectWhatsApp] Successfully registered phone ${phone_number_id} with Meta`);
+      } catch (regErr) {
+        if (!isAlreadyRegisteredError(regErr)) {
+          console.warn('[connectWhatsApp] Phone registration warning:', regErr.response?.data || regErr.message);
+        }
+      }
+
+      const existingPrimary = await WhatsappPhoneNumber.findOne({
+        user_id: userId,
+        waba_id: waba._id,
+        is_primary: true,
+        deleted_at: null
+      });
+
       if (phoneNumber) {
         phoneNumber.user_id = userId;
         phoneNumber.waba_id = waba._id;
         phoneNumber.display_phone_number = registred_phone_number;
+        phoneNumber.verified_name = verifiedName || phoneNumber.verified_name;
+        phoneNumber.quality_rating = qualityRating || phoneNumber.quality_rating;
+        phoneNumber.status = 'CONNECTED';
         phoneNumber.is_active = true;
         phoneNumber.deleted_at = null;
-        if (name) phoneNumber.verified_name = name;
+        if (!existingPrimary) phoneNumber.is_primary = true;
         await phoneNumber.save();
       } else {
-        const phoneCount = await WhatsappPhoneNumber.countDocuments({ user_id: userId, deleted_at: null });
         phoneNumber = await WhatsappPhoneNumber.create({
           user_id: userId,
           waba_id: waba._id,
           phone_number_id,
           display_phone_number: registred_phone_number,
-          verified_name: name,
+          verified_name: verifiedName,
+          quality_rating: qualityRating,
+          status: 'CONNECTED',
           is_active: true,
-          is_primary: phoneCount === 0
+          is_primary: !existingPrimary
         });
       }
 
@@ -3849,6 +3907,12 @@ export const getEmbbededSignupConnection = async (req, res) => {
     }
 
     const isNewPhone = !phoneNumber;
+    const existingPrimary = await WhatsappPhoneNumber.findOne({
+      user_id: userId,
+      waba_id: waba._id,
+      is_primary: true,
+      deleted_at: null
+    });
 
     if (phoneNumber) {
       phoneNumber.user_id = userId;
@@ -3856,11 +3920,12 @@ export const getEmbbededSignupConnection = async (req, res) => {
       phoneNumber.display_phone_number = display_phone_number;
       phoneNumber.verified_name = verified_name;
       phoneNumber.quality_rating = quality_rating;
+      phoneNumber.status = 'CONNECTED';
       phoneNumber.is_active = true;
       phoneNumber.deleted_at = null;
+      if (!existingPrimary) phoneNumber.is_primary = true;
       await phoneNumber.save();
     } else {
-      const phoneCount = await WhatsappPhoneNumber.countDocuments({ user_id: userId, deleted_at: null });
       phoneNumber = await WhatsappPhoneNumber.create({
         user_id: userId,
         waba_id: waba._id,
@@ -3868,32 +3933,34 @@ export const getEmbbededSignupConnection = async (req, res) => {
         display_phone_number,
         verified_name,
         quality_rating,
+        status: 'CONNECTED',
         is_active: true,
-        is_primary: phoneCount === 0
+        is_primary: !existingPrimary
       });
     }
 
-    // if (!isCoexistence) {
-    //   try {
-    //     await axios.post(
-    //       `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${signupData.phone_number_id}/register`,
-    //       {
-    //         messaging_product: "whatsapp",
-    //         pin: signupData.pin || req.body.pin || process.env.WHATSAPP_DEFAULT_PIN || "123456"
-    //       },
-    //       {
-    //         headers: {
-    //           Authorization: `Bearer ${accessToken}`,
-    //           'Content-Type': 'application/json'
-    //         }
-    //       }
-    //     );
-    //   } catch (regErr) {
-    //     if (!isAlreadyRegisteredError(regErr)) {
-    //       throw regErr;
-    //     }
-    //   }
-    // }
+    if (!isCoexistence) {
+      try {
+        await axios.post(
+          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${signupData.phone_number_id}/register`,
+          {
+            messaging_product: "whatsapp",
+            pin: signupData.pin || req.body.pin || process.env.WHATSAPP_DEFAULT_PIN || "123456"
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`[EmbeddedSignup] Successfully registered phone ${signupData.phone_number_id} with Meta`);
+      } catch (regErr) {
+        if (!isAlreadyRegisteredError(regErr)) {
+          console.warn('[EmbeddedSignup] Registration warning:', regErr.response?.data || regErr.message);
+        }
+      }
+    }
 
     return res.json({
       success: true,
@@ -5310,6 +5377,112 @@ export const sendOrderMessage = async (req, res) => {
   }
 };
 
+export const testWhatsAppConnection = async (req, res) => {
+  try {
+    const userId = req.user.owner_id;
+    const { phone_number_id, recipient_number, message } = req.body;
+
+    if (!recipient_number) {
+      return res.status(400).json({ success: false, error: 'Recipient phone number is required' });
+    }
+
+    let phone = null;
+    if (phone_number_id) {
+      phone = await WhatsappPhoneNumber.findOne({ phone_number_id, user_id: userId, deleted_at: null }).populate('waba_id');
+    }
+    if (!phone) {
+      phone = await WhatsappPhoneNumber.findOne({ user_id: userId, is_primary: true, deleted_at: null }).populate('waba_id');
+    }
+    if (!phone || !phone.waba_id) {
+      return res.status(404).json({ success: false, error: 'No active WhatsApp phone number found for this user' });
+    }
+
+    const cleanRecipient = recipient_number.replace(/[^\d]/g, '');
+    const textToSend = message || `Hello! This is a test message from ${phone.verified_name || phone.display_phone_number || 'our WhatsApp Business Account'}.`;
+
+    const token = phone.waba_id.access_token;
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'WhatsApp Access Token missing' });
+    }
+
+    const metaRes = await axios.post(
+      `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${phone.phone_number_id}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: cleanRecipient,
+        type: 'text',
+        text: {
+          preview_url: false,
+          body: textToSend
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const waMsgId = metaRes.data?.messages?.[0]?.id;
+
+    // Save contact and message to DB so it shows up in WA Chat
+    const now = new Date();
+    let contact = await Contact.findOne({ user_id: userId, phone_number: cleanRecipient });
+    if (!contact) {
+      contact = await Contact.create({
+        user_id: userId,
+        phone_number: cleanRecipient,
+        name: cleanRecipient,
+        platform: 'whatsapp',
+        is_active: true,
+        deleted_at: null,
+        created_at: now,
+        updated_at: now
+      });
+    }
+
+    await Message.create({
+      sender_number: phone.display_phone_number ? phone.display_phone_number.replace(/[^\d]/g, '') : '',
+      recipient_number: cleanRecipient,
+      platform: 'whatsapp',
+      user_id: userId,
+      contact_id: contact._id,
+      content: textToSend,
+      message_type: 'text',
+      from_me: true,
+      wa_message_id: waMsgId,
+      direction: 'outbound',
+      wa_timestamp: now,
+      delivery_status: 'sent',
+      is_delivered: true,
+      delivered_at: now,
+      whatsapp_phone_number_id: phone._id,
+      provider: 'business_api',
+      created_at: now,
+      updated_at: now
+    });
+
+    return res.json({
+      success: true,
+      message: 'Test message sent successfully!',
+      data: {
+        wa_message_id: waMsgId,
+        recipient: cleanRecipient,
+        contact_id: contact._id
+      }
+    });
+  } catch (err) {
+    console.error('Test connection error:', err.response?.data || err.message);
+    const metaError = err.response?.data?.error?.message || err.message;
+    return res.status(500).json({
+      success: false,
+      error: `Failed to send message: ${metaError}`
+    });
+  }
+};
+
 export default {
   sendMessage,
   sendProductMessage,
@@ -5336,5 +5509,6 @@ export default {
   clearChat,
   deleteChat,
   disconnectWhatsApp,
-  getWabaList
+  getWabaList,
+  testWhatsAppConnection
 };

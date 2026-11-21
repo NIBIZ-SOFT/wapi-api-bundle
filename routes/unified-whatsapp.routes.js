@@ -43,5 +43,6 @@ router.get('/phone-numbers', checkPermission(['view.unified_whatsapp', 'manage.c
 router.put('/phone-numbers/:phoneNumberId/set-primary', checkPermission('update.unified_whatsapp'), unifiedWhatsAppController.setPrimaryPhoneNumber);
 router.get('/:wabaId/phone-numbers', checkPermission(['view.unified_whatsapp', 'manage.conversations']), unifiedWhatsAppController.getWabaPhoneNumbers);
 router.post('/embedded-signup/connection', checkPermission('create.unified_whatsapp'), unifiedWhatsAppController.getEmbbededSignupConnection);
+router.post('/test-connection', checkPermission(['view.unified_whatsapp', 'manage.conversations']), unifiedWhatsAppController.testWhatsAppConnection);
 router.get('/contact-profile', checkPermission(['view.unified_whatsapp', 'manage.conversations']), unifiedWhatsAppController.getContactProfile);
 export default router;
