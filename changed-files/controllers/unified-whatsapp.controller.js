@@ -35,6 +35,12 @@ const getAgentAllowedPhoneNumber = async (agentId, contactPhoneNumber, whatsappP
     .populate('waba_id')
     .lean();
   if (!phoneNumber || !phoneNumber.waba_id) return null;
+
+  const agentUser = await User.findById(agentId).lean();
+  if (agentUser && agentUser.created_by && phoneNumber.user_id && agentUser.created_by.toString() === phoneNumber.user_id.toString()) {
+    return phoneNumber;
+  }
+
   const businessNumber = phoneNumber.display_phone_number;
   const chatMatch = {
     $or: [
@@ -171,6 +177,7 @@ const groupMessagesByDateAndSender = (messages, replyMessagesMap = {}, reactions
       fileUrl: message.file_url || null,
       template: message.template_id || null,
       metadata: message.metadata || null,
+      referral: message.metadata?.referral || null,
       createdAt: message.wa_timestamp,
       can_chat: message.can_chat,
       delivered_at: message.delivered_at || null,
@@ -663,9 +670,14 @@ export const sendMessage = async (req, res) => {
           },
           user_id: newMessage.user_id?.toString(),
           contact_id: contact._id.toString(),
+          workspace_id: (newMessage.workspace_id || contact.workspace_id || connection?.workspace_id)?.toString(),
           platform: platform,
           provider: platform
         };
+        const targetWsId = formattedMessage.workspace_id;
+        if (targetWsId) {
+          io.to(`workspace:${targetWsId}`).emit('whatsapp:message', formattedMessage);
+        }
         io.emit('whatsapp:message', formattedMessage);
       }
 
@@ -1143,9 +1155,14 @@ export const sendMessage = async (req, res) => {
               },
               user_id: newMessage.user_id?.toString(),
               contact_id: contactDoc._id.toString(),
+              workspace_id: (newMessage.workspace_id || contactDoc.workspace_id || connection?.workspace_id)?.toString(),
               platform: platform,
               provider: platform
             };
+            const targetWsId = formattedMessage.workspace_id;
+            if (targetWsId) {
+              io.to(`workspace:${targetWsId}`).emit('whatsapp:message', formattedMessage);
+            }
             io.emit('whatsapp:message', formattedMessage);
           }
         }
@@ -1635,7 +1652,8 @@ export const getContactProfile = async (req, res) => {
       contact: {
         _id: contact._id.toString(),
         name: contact.name,
-        phone_number: displayName,
+        display_name: displayName,
+        phone_number: contact.phone_number || "",
         whatsapp_username: contact.whatsapp_username || null,
         whatsapp_bsuid: contact.whatsapp_bsuid || null,
         email: contact.email,
@@ -2021,12 +2039,6 @@ export const getMessages = async (req, res) => {
 
     let resolvedWhatsappPhoneNumberId = whatsappPhoneNumberId;
     if (!resolvedWhatsappPhoneNumberId) {
-      if (req.user.role === 'agent') {
-        return res.status(400).json({
-          success: false,
-          error: 'whatsapp_phone_number_id is required for agents (use the phone number of the assigned chat).'
-        });
-      }
       const primaryPhoneNumber = await WhatsappPhoneNumber.findOne({
         user_id: userId,
         is_primary: true,
@@ -2034,14 +2046,23 @@ export const getMessages = async (req, res) => {
         deleted_at: null
       }).lean();
 
-      if (!primaryPhoneNumber) {
-        return res.status(400).json({
-          success: false,
-          error: 'No primary phone number found. Please set a primary phone number or provide a WhatsApp Phone Number ID.'
-        });
+      if (primaryPhoneNumber) {
+        resolvedWhatsappPhoneNumberId = primaryPhoneNumber._id.toString();
+      } else {
+        const anyPhoneNumber = await WhatsappPhoneNumber.findOne({
+          user_id: userId,
+          is_active: true,
+          deleted_at: null
+        }).lean();
+        if (anyPhoneNumber) resolvedWhatsappPhoneNumberId = anyPhoneNumber._id.toString();
       }
 
-      resolvedWhatsappPhoneNumberId = primaryPhoneNumber._id.toString();
+      if (!resolvedWhatsappPhoneNumberId) {
+        return res.status(400).json({
+          success: false,
+          error: 'No phone number found. Please set a primary phone number or provide a WhatsApp Phone Number ID.'
+        });
+      }
     }
 
     let whatsappPhoneNumber = null;
@@ -2809,7 +2830,7 @@ export const getRecentChats = async (req, res) => {
           deleted_at: null
         })
           .distinct('contact_id')
-          .then(ids => new Set(ids.map(id => id.toString())));
+          .then(ids => new Set(ids.filter(Boolean).map(id => id.toString())));
         filteredChats = filteredChats.filter(chat => contactIdsWithNotes.has(chat.contact?.id));
       }
 
@@ -2821,7 +2842,7 @@ export const getRecentChats = async (req, res) => {
             { is_seen: false },
             { read_status: 'unread' }
           ]
-        }).then(ids => new Set(ids.map(id => id.toString())));
+        }).then(ids => new Set(ids.filter(Boolean).map(id => id.toString())));
 
         if (filterLastMessageRead === false) {
           filteredChats = filteredChats.filter(chat => contactsWithUnread.has(chat.contact?.id));
@@ -2920,16 +2941,16 @@ export const getRecentChats = async (req, res) => {
         }
       }
       const uniquePhoneIds = [...phoneIds];
-      if (uniquePhoneIds.length === 0) {
-        return res.status(200).json({ success: true, data: [] });
+      if (uniquePhoneIds.length === 1) {
+        resolvedWhatsappPhoneNumberId = uniquePhoneIds[0];
+      } else if (!resolvedWhatsappPhoneNumberId) {
+        const defaultPhone = await WhatsappPhoneNumber.findOne({
+          user_id: contactsOwnerId,
+          is_active: true,
+          deleted_at: null
+        }).sort({ is_primary: -1 }).lean();
+        if (defaultPhone) resolvedWhatsappPhoneNumberId = defaultPhone._id.toString();
       }
-      if (uniquePhoneIds.length > 1) {
-        return res.status(400).json({
-          success: false,
-          error: 'Multiple assigned chats use different phone numbers. Please pass whatsapp_phone_number_id to list chats for a specific number.'
-        });
-      }
-      resolvedWhatsappPhoneNumberId = uniquePhoneIds[0];
     }
 
     if (resolvedWhatsappPhoneNumberId) {
@@ -2948,36 +2969,11 @@ export const getRecentChats = async (req, res) => {
       }
 
       if (req.user.role === 'agent') {
-        const assignmentQuery = {
-          agent_id: req.user.id,
-          $or: [{ status: 'assigned' }, { status: { $exists: false } }]
-        };
-        if (mongoose.Types.ObjectId.isValid(resolvedWhatsappPhoneNumberId)) {
-          assignmentQuery.whatsapp_phone_number_id = resolvedWhatsappPhoneNumberId;
-        }
-
-        let agentHasAssignment = await ChatAssignment.findOne(assignmentQuery).lean();
-        if (!agentHasAssignment) {
-          const legacy = await ChatAssignment.findOne({
-            agent_id: req.user.id,
-            whatsapp_phone_number_id: { $exists: false },
-            $or: [{ status: 'assigned' }, { status: { $exists: false } }]
-          }).select('assigned_by sender_number receiver_number').lean();
-          if (legacy) {
-            const phone = await WhatsappPhoneNumber.findOne({
-              user_id: legacy.assigned_by,
-              display_phone_number: { $in: [legacy.sender_number, legacy.receiver_number] },
-              _id: resolvedWhatsappPhoneNumberId,
-              deleted_at: null
-            }).lean();
-            agentHasAssignment = !!phone;
-          }
-        }
-        if (!agentHasAssignment) {
-          return res.status(200).json({
-            success: true,
-            data: [],
-            message: 'You do not have any assigned chats for this phone number'
+        const belongsToOrg = whatsappPhoneNumber.user_id && req.user.owner_id && (whatsappPhoneNumber.user_id.toString() === req.user.owner_id.toString());
+        if (!belongsToOrg) {
+          return res.status(403).json({
+            success: false,
+            error: 'You do not have access to this phone number'
           });
         }
       }
@@ -3022,7 +3018,7 @@ export const getRecentChats = async (req, res) => {
     const { page, limit } = parsePaginationParams({ ...req.query, limit: req.query.limit || 15 });
 
     let assignedNumbersArr = [];
-    if (req.user.role === 'agent' && myPhoneNumber) {
+    if (req.user.role === 'agent' && myPhoneNumber && (req.query.is_assigned === 'true' || req.query.is_assigned === true)) {
       const assignments = await ChatAssignment.find({
         agent_id: req.user.id,
         whatsapp_phone_number_id: resolvedWhatsappPhoneNumberId,
@@ -3052,18 +3048,23 @@ export const getRecentChats = async (req, res) => {
       created_by: contactsOwnerId,
       deleted_at: null
     })
-      .select('_id phone_number name tags is_pinned is_snoozed chat_status')
+      .select('_id phone_number name tags is_pinned is_snoozed chat_status whatsapp_bsuid whatsapp_username')
       .populate('tags', 'label color')
       .lean();
 
     const contactMap = userContacts.reduce((acc, contact) => {
-      acc[contact.phone_number] = {
+      const info = {
         id: contact._id.toString(),
         name: contact.name,
+        phone_number: contact.phone_number,
+        whatsapp_bsuid: contact.whatsapp_bsuid || null,
+        whatsapp_username: contact.whatsapp_username || null,
         chat_status: contact.chat_status || 'open',
         is_pinned: contact.is_pinned === true,
         is_snoozed: contact.is_snoozed === true
       };
+      if (contact.phone_number) acc[contact.phone_number] = info;
+      if (contact.whatsapp_bsuid) acc[contact.whatsapp_bsuid] = info;
       return acc;
     }, {});
 
@@ -3154,6 +3155,9 @@ export const getRecentChats = async (req, res) => {
         const contactInfo = contactMap[chat.contact.number] || {
           id: null,
           name: chat.contact.number,
+          phone_number: chat.contact.number,
+          whatsapp_bsuid: null,
+          whatsapp_username: null,
           is_pinned: false,
           is_snoozed: false
         };
@@ -3167,6 +3171,8 @@ export const getRecentChats = async (req, res) => {
           displayName = contactInfo.name;
         }
 
+        const realPhoneNumber = contactInfo.phone_number || chat.contact.phone_number || chat.contact.number;
+
         return {
           ...chat,
           is_pinned: isPinned,
@@ -3175,7 +3181,10 @@ export const getRecentChats = async (req, res) => {
             ...chat.contact,
             id: contactId,
             number: displayName,
-            name: contactInfo.name,
+            name: contactInfo.name || displayName,
+            phone_number: realPhoneNumber,
+            whatsapp_bsuid: contactInfo.whatsapp_bsuid || chat.contact.whatsapp_bsuid || null,
+            whatsapp_username: contactInfo.whatsapp_username || chat.contact.whatsapp_username || null,
             is_pinned: isPinned,
             is_snoozed: isSnoozed,
             chat_status: contactInfo.chat_status || 'open',
@@ -3188,6 +3197,9 @@ export const getRecentChats = async (req, res) => {
         const contactInfo = contactMap[chat.contact.number] || {
           id: null,
           name: chat.contact.number,
+          phone_number: chat.contact.number,
+          whatsapp_bsuid: null,
+          whatsapp_username: null,
           is_pinned: false,
           is_snoozed: false
         };
@@ -3201,6 +3213,8 @@ export const getRecentChats = async (req, res) => {
           displayName = contactInfo.name;
         }
 
+        const realPhoneNumber = contactInfo.phone_number || chat.contact.phone_number || chat.contact.number;
+
         return {
           ...chat,
           is_pinned: isPinned,
@@ -3209,7 +3223,10 @@ export const getRecentChats = async (req, res) => {
             ...chat.contact,
             id: contactId,
             number: displayName,
-            name: contactInfo.name,
+            name: contactInfo.name || displayName,
+            phone_number: realPhoneNumber,
+            whatsapp_bsuid: contactInfo.whatsapp_bsuid || chat.contact.whatsapp_bsuid || null,
+            whatsapp_username: contactInfo.whatsapp_username || chat.contact.whatsapp_username || null,
             is_pinned: isPinned,
             is_snoozed: isSnoozed,
             chat_status: contactInfo.chat_status || 'open',
@@ -3217,6 +3234,29 @@ export const getRecentChats = async (req, res) => {
           }
         };
       });
+    }
+
+    for (const chat of filteredChats) {
+      if (chat.contact && !chat.contact.id && chat.contact.number) {
+        const num = chat.contact.number;
+        const newContact = await Contact.findOneAndUpdate(
+          { phone_number: num, created_by: contactsOwnerId },
+          {
+            $setOnInsert: {
+              name: num,
+              phone_number: num,
+              user_id: contactsOwnerId,
+              created_by: contactsOwnerId,
+              source: 'baileys'
+            },
+            $set: { deleted_at: null }
+          },
+          { upsert: true, new: true }
+        ).lean();
+        if (newContact) {
+          chat.contact.id = newContact._id.toString();
+        }
+      }
     }
 
     filteredChats = filteredChats.filter(chat => chat.contact && chat.contact.id !== null);
@@ -3258,7 +3298,7 @@ export const getRecentChats = async (req, res) => {
         deleted_at: null
       })
         .distinct('contact_id')
-        .then(ids => new Set(ids.map(id => id.toString())));
+        .then(ids => new Set(ids.filter(Boolean).map(id => id.toString())));
       filteredChats = filteredChats.filter(chat => contactIdsWithNotes.has(chat.contact?.id));
     }
 
@@ -3270,7 +3310,7 @@ export const getRecentChats = async (req, res) => {
           { is_seen: false },
           { read_status: 'unread' }
         ]
-      }).then(ids => new Set(ids.map(id => id.toString())));
+      }).then(ids => new Set(ids.filter(Boolean).map(id => id.toString())));
 
       if (filterLastMessageRead === false) {
         filteredChats = filteredChats.filter(chat => contactsWithUnread.has(chat.contact?.id));
@@ -3522,26 +3562,6 @@ export const connectWhatsApp = async (req, res) => {
         }
       }
 
-      let wabaCheck = await WhatsappWaba.findOne({
-        whatsapp_business_account_id,
-        deleted_at: null
-      });
-
-      if (wabaCheck) {
-        if (wabaCheck.user_id.toString() !== userId.toString()) {
-          return res.status(400).json({
-            success: false,
-            error: 'This WhatsApp Business Account is already connected to another user.'
-          });
-        }
-        if (workspace_id && wabaCheck.workspace_id && wabaCheck.workspace_id.toString() !== workspace_id.toString()) {
-          return res.status(400).json({
-            success: false,
-            error: 'This WhatsApp Business Account is already connected to another workspace.'
-          });
-        }
-      }
-
       if (workspace_id) {
         const existingWaba = await WhatsappWaba.findOne({
           workspace_id: workspace_id,
@@ -3555,7 +3575,7 @@ export const connectWhatsApp = async (req, res) => {
       }
 
       let waba = await WhatsappWaba.findOne({
-        user_id: userId,
+        workspace_id: workspace_id,
         whatsapp_business_account_id
       });
 
@@ -3572,6 +3592,7 @@ export const connectWhatsApp = async (req, res) => {
           is_active: true
         });
       } else {
+        waba.user_id = userId;
         waba.access_token = access_token;
         waba.business_id = business_id || waba.business_id;
         waba.workspace_id = workspace_id || waba.workspace_id;
@@ -3646,7 +3667,8 @@ export const connectWhatsApp = async (req, res) => {
         is_active: true
       });
 
-      unifiedWhatsAppService.initializeConnection(userId, PROVIDER_TYPES.BAILEY, waba)
+      const syncChat = req.body.sync_chat !== false;
+      unifiedWhatsAppService.initializeConnection(userId, PROVIDER_TYPES.BAILEY, { ...waba.toObject(), sync_chat: syncChat })
         .catch(err => console.error('Error initializing Baileys in background:', err));
 
       return res.json({
@@ -3697,6 +3719,11 @@ export const getEmbbededSignupConnection = async (req, res) => {
   setTimeout(() => processedAuthCodes.delete(code), 5 * 60 * 1000);
 
   try {
+    console.log('--- EMBEDDED SIGNUP REQUEST ---', {
+      userId,
+      workspace_id,
+      signupData
+    });
 
     const metaSettings = await Setting.findOne().lean();
 
@@ -3722,7 +3749,28 @@ export const getEmbbededSignupConnection = async (req, res) => {
 
     const accessToken = tokenRes.data.access_token;
 
-    await subscribeWabaToApp(signupData.waba_id, accessToken);
+    try {
+      await subscribeWabaToApp(signupData.waba_id, accessToken);
+      console.log('Successfully subscribed WABA to app webhooks:', signupData.waba_id);
+    } catch (subErr) {
+      console.warn('Warning: Failed to subscribe WABA with user token:', subErr.response?.data || subErr.message);
+      // Attempt subscribing with app credentials fallback
+      try {
+        await axios.post(
+          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${signupData.waba_id}/subscribed_apps`,
+          {},
+          {
+            headers: {
+              Authorization: `Bearer ${APP_ID}|${APP_SECRET}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log('Successfully subscribed WABA to app using App Token');
+      } catch (appTokenErr) {
+        console.warn('Warning: Subscribing with App Token also failed (continuing onboarding):', appTokenErr.response?.data || appTokenErr.message);
+      }
+    }
 
     const phoneRes = await axios.get(
       `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${signupData.phone_number_id}`,
@@ -3758,26 +3806,6 @@ export const getEmbbededSignupConnection = async (req, res) => {
       }
     }
 
-    let wabaCheck = await WhatsappWaba.findOne({
-      whatsapp_business_account_id: signupData.waba_id,
-      deleted_at: null
-    });
-
-    if (wabaCheck) {
-      if (wabaCheck.user_id.toString() !== userId.toString()) {
-        return res.status(400).json({
-          success: false,
-          error: 'This WhatsApp Business Account is already connected to another user.'
-        });
-      }
-      if (workspace_id && wabaCheck.workspace_id && wabaCheck.workspace_id.toString() !== workspace_id.toString()) {
-        return res.status(400).json({
-          success: false,
-          error: 'This WhatsApp Business Account is already connected to another workspace.'
-        });
-      }
-    }
-
     if (workspace_id) {
       const existingWaba = await WhatsappWaba.findOne({
         workspace_id: workspace_id,
@@ -3791,7 +3819,7 @@ export const getEmbbededSignupConnection = async (req, res) => {
     }
 
     let waba = await WhatsappWaba.findOne({
-      user_id: userId,
+      workspace_id: workspace_id,
       whatsapp_business_account_id: signupData.waba_id
     });
     const isNewWaba = !waba;
@@ -3808,9 +3836,10 @@ export const getEmbbededSignupConnection = async (req, res) => {
         is_active: true
       });
     } else {
+      waba.user_id = userId;
       waba.access_token = accessToken;
-      waba.business_id = signupData.business_id,
-        waba.workspace_id = workspace_id || waba.workspace_id;
+      waba.business_id = signupData.business_id;
+      waba.workspace_id = workspace_id || waba.workspace_id;
       waba.name = verified_name || display_phone_number;
       waba.is_active = true;
       waba.deleted_at = null;
@@ -4064,11 +4093,13 @@ export const getMyPhoneNumbers = async (req, res) => {
 
         let displayName = phone.display_phone_number;
         if (verified_name && verified_name !== 'N/A' && verified_name.trim() !== '') {
-          displayName = verified_name;
+          displayName = phone.display_phone_number ? `${verified_name} (${phone.display_phone_number})` : verified_name;
         }
 
         return {
           display_phone_number: displayName,
+          phone_number: phone.display_phone_number,
+          verified_name: verified_name ?? "N/A",
           id: phone._id,
           is_primary: phone.is_primary
         };
@@ -4655,7 +4686,7 @@ export const getBaileysQRCode = async (req, res) => {
   try {
     const userId = req.user.owner_id;
     const { wabaId } = req.params;
-    const syncChat = req.query.sync_chat === 'true';
+    const syncChat = req.query.sync_chat !== 'false';
 
     if (!wabaId) {
       return res.status(400).json({

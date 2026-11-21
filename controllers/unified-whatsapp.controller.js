@@ -3719,6 +3719,11 @@ export const getEmbbededSignupConnection = async (req, res) => {
   setTimeout(() => processedAuthCodes.delete(code), 5 * 60 * 1000);
 
   try {
+    console.log('--- EMBEDDED SIGNUP REQUEST ---', {
+      userId,
+      workspace_id,
+      signupData
+    });
 
     const metaSettings = await Setting.findOne().lean();
 
@@ -3744,7 +3749,28 @@ export const getEmbbededSignupConnection = async (req, res) => {
 
     const accessToken = tokenRes.data.access_token;
 
-    await subscribeWabaToApp(signupData.waba_id, accessToken);
+    try {
+      await subscribeWabaToApp(signupData.waba_id, accessToken);
+      console.log('Successfully subscribed WABA to app webhooks:', signupData.waba_id);
+    } catch (subErr) {
+      console.warn('Warning: Failed to subscribe WABA with user token:', subErr.response?.data || subErr.message);
+      // Attempt subscribing with app credentials fallback
+      try {
+        await axios.post(
+          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${signupData.waba_id}/subscribed_apps`,
+          {},
+          {
+            headers: {
+              Authorization: `Bearer ${APP_ID}|${APP_SECRET}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log('Successfully subscribed WABA to app using App Token');
+      } catch (appTokenErr) {
+        console.warn('Warning: Subscribing with App Token also failed (continuing onboarding):', appTokenErr.response?.data || appTokenErr.message);
+      }
+    }
 
     const phoneRes = await axios.get(
       `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${signupData.phone_number_id}`,
