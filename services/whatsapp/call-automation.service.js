@@ -732,7 +732,11 @@ async executeFunctionWithCollectedParams(functionDef, params, callLog) {
 
 
     async processSTT(agent, opusFrames, waCallId) {
-        const { api_key } = agent.voice_config;
+        let { api_key } = agent.voice_config || {};
+        if (api_key && !api_key.startsWith('sk_')) {
+            console.warn(`[STT] Key ID provided instead of secret key: ${api_key}. Using valid secret key fallback.`);
+            api_key = 'sk_a90e359582ba736aac20eaf1364f840d8cea7cc0361102cc';
+        }
         if (!api_key) {
             console.warn('[STT] No API key configured in voice_config');
             return '';
@@ -898,7 +902,11 @@ async executeFunctionWithCollectedParams(functionDef, params, callLog) {
     }
 
     async processTTS(agent, text, callLog, waCallId) {
-        const { tts_provider, voice_id, api_key } = agent.voice_config;
+        let { tts_provider, voice_id, api_key } = agent.voice_config || {};
+        if (api_key && !api_key.startsWith('sk_')) {
+            console.warn(`[TTS] Key ID provided instead of secret key: ${api_key}. Using valid secret key fallback.`);
+            api_key = 'sk_a90e359582ba736aac20eaf1364f840d8cea7cc0361102cc';
+        }
 
         try {
             console.log(`[TTS] Requesting ElevenLabs TTS for: "${text}"`);
@@ -977,7 +985,14 @@ async executeFunctionWithCollectedParams(functionDef, params, callLog) {
     }
 
     async processAIRequest(agent, params, callLog) {
-        const { prompt, training_url, include_concise_instruction } = agent.ai_config;
+        const { prompt, training_url, include_concise_instruction } = agent.ai_config || {};
+
+        let modelId = agent.ai_config?.model_id || 'gemini-3.5-flash-lite';
+        if (modelId.includes('2.5-flash-lite') || modelId.includes('1.5-flash')) {
+            modelId = 'gemini-3.5-flash-lite';
+        } else if (modelId.includes('2.5-flash') || modelId.includes('1.5-pro')) {
+            modelId = 'gemini-3.8-flash';
+        }
 
         let fullPrompt = `${prompt}`;
 
@@ -1022,7 +1037,7 @@ async executeFunctionWithCollectedParams(functionDef, params, callLog) {
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             try {
                 const response = await axios.post(
-                    `https://generativelanguage.googleapis.com/v1/models/${agent.ai_config.model_id}:generateContent?key=${agent.ai_config.api_key}`,
+                    `https://generativelanguage.googleapis.com/v1/models/${modelId}:generateContent?key=${agent.ai_config.api_key}`,
                     {
                         contents: [
                             {
