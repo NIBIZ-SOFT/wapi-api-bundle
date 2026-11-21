@@ -5388,22 +5388,66 @@ export const testWhatsAppConnection = async (req, res) => {
 
     let phone = null;
     if (phone_number_id) {
-      phone = await WhatsappPhoneNumber.findOne({ phone_number_id, user_id: userId, deleted_at: null }).populate('waba_id');
-    }
-    if (!phone) {
-      phone = await WhatsappPhoneNumber.findOne({ user_id: userId, is_primary: true, deleted_at: null }).populate('waba_id');
-    }
-    if (!phone || !phone.waba_id) {
-      return res.status(404).json({ success: false, error: 'No active WhatsApp phone number found for this user' });
+      if (mongoose.Types.ObjectId.isValid(phone_number_id)) {
+        phone = await WhatsappPhoneNumber.findOne({
+          $or: [{ _id: phone_number_id }, { phone_number_id: String(phone_number_id) }],
+          deleted_at: null
+        }).populate('waba_id');
+      } else {
+        phone = await WhatsappPhoneNumber.findOne({
+          phone_number_id: String(phone_number_id),
+          deleted_at: null
+        }).populate('waba_id');
+      }
     }
 
-    const cleanRecipient = recipient_number.replace(/[^\d]/g, '');
-    const textToSend = message || `Hello! This is a test message from ${phone.verified_name || phone.display_phone_number || 'our WhatsApp Business Account'}.`;
+    if (!phone) {
+      const wsId = req.headers['workspace-id'] || req.user?.current_workspace_id;
+      if (wsId) {
+        phone = await WhatsappPhoneNumber.findOne({
+          workspace_id: wsId,
+          is_primary: true,
+          deleted_at: null
+        }).populate('waba_id');
+        if (!phone) {
+          phone = await WhatsappPhoneNumber.findOne({
+            workspace_id: wsId,
+            deleted_at: null
+          }).populate('waba_id');
+        }
+      }
+    }
+
+    if (!phone) {
+      phone = await WhatsappPhoneNumber.findOne({
+        user_id: userId,
+        is_primary: true,
+        deleted_at: null
+      }).populate('waba_id');
+    }
+
+    if (!phone) {
+      phone = await WhatsappPhoneNumber.findOne({
+        user_id: userId,
+        deleted_at: null
+      }).populate('waba_id');
+    }
+
+    if (!phone || !phone.waba_id) {
+      return res.status(404).json({ success: false, error: 'No active WhatsApp phone number found for this account' });
+    }
+
+    let cleanRecipient = recipient_number.replace(/[^\d]/g, '');
+    if (cleanRecipient.startsWith('0') && cleanRecipient.length === 11) {
+      cleanRecipient = '88' + cleanRecipient;
+    }
 
     const token = phone.waba_id.access_token;
     if (!token) {
       return res.status(400).json({ success: false, error: 'WhatsApp Access Token missing' });
     }
+
+    const textToSend = message || `Hello! This is a test message from ${phone.verified_name || phone.display_phone_number || 'our WhatsApp Business Account'}.`;
 
     const metaRes = await axios.post(
       `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${phone.phone_number_id}/messages`,
@@ -5429,40 +5473,50 @@ export const testWhatsAppConnection = async (req, res) => {
 
     // Save contact and message to DB so it shows up in WA Chat
     const now = new Date();
-    let contact = await Contact.findOne({ user_id: userId, phone_number: cleanRecipient });
-    if (!contact) {
-      contact = await Contact.create({
-        user_id: userId,
-        phone_number: cleanRecipient,
-        name: cleanRecipient,
+    let contact = null;
+    try {
+      const wsId = phone.workspace_id || req.headers['workspace-id'] || req.user?.current_workspace_id || null;
+      contact = await Contact.findOne({ user_id: userId, phone_number: cleanRecipient, deleted_at: null });
+      if (!contact) {
+        contact = await Contact.create({
+          user_id: userId,
+          created_by: req.user?._id || userId,
+          workspace_id: wsId,
+          phone_number: cleanRecipient,
+          name: cleanRecipient,
+          source: 'whatsapp',
+          status: 'lead',
+          type: 'lead',
+          chat_status: 'open',
+          deleted_at: null,
+          created_at: now,
+          updated_at: now
+        });
+      }
+
+      await Message.create({
+        sender_number: phone.display_phone_number ? phone.display_phone_number.replace(/[^\d]/g, '') : '',
+        recipient_number: cleanRecipient,
         platform: 'whatsapp',
-        is_active: true,
-        deleted_at: null,
+        user_id: userId,
+        contact_id: contact._id,
+        content: textToSend,
+        message_type: 'text',
+        from_me: true,
+        wa_message_id: waMsgId,
+        direction: 'outbound',
+        wa_timestamp: now,
+        delivery_status: 'sent',
+        is_delivered: true,
+        delivered_at: now,
+        whatsapp_phone_number_id: phone._id,
+        provider: 'business_api',
         created_at: now,
         updated_at: now
       });
+    } catch (dbErr) {
+      console.error('Error saving test message/contact to DB:', dbErr.message);
     }
-
-    await Message.create({
-      sender_number: phone.display_phone_number ? phone.display_phone_number.replace(/[^\d]/g, '') : '',
-      recipient_number: cleanRecipient,
-      platform: 'whatsapp',
-      user_id: userId,
-      contact_id: contact._id,
-      content: textToSend,
-      message_type: 'text',
-      from_me: true,
-      wa_message_id: waMsgId,
-      direction: 'outbound',
-      wa_timestamp: now,
-      delivery_status: 'sent',
-      is_delivered: true,
-      delivered_at: now,
-      whatsapp_phone_number_id: phone._id,
-      provider: 'business_api',
-      created_at: now,
-      updated_at: now
-    });
 
     return res.json({
       success: true,
@@ -5470,7 +5524,7 @@ export const testWhatsAppConnection = async (req, res) => {
       data: {
         wa_message_id: waMsgId,
         recipient: cleanRecipient,
-        contact_id: contact._id
+        contact_id: contact?._id || null
       }
     });
   } catch (err) {
@@ -5478,7 +5532,7 @@ export const testWhatsAppConnection = async (req, res) => {
     const metaError = err.response?.data?.error?.message || err.message;
     return res.status(500).json({
       success: false,
-      error: `Failed to send message: ${metaError}`
+      error: metaError || 'Failed to send test message'
     });
   }
 };
