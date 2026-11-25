@@ -3832,20 +3832,48 @@ export const getEmbbededSignupConnection = async (req, res) => {
       }
     }
 
-    const phoneRes = await axios.get(
-      `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${signupData.phone_number_id}`,
-      {
-        params: {
-          fields: 'display_phone_number,verified_name,quality_rating,is_on_biz_app,platform_type'
-        },
-        headers: {
-          Authorization: `Bearer ${accessToken}`
+    let phoneData = {};
+    try {
+      const phoneRes = await axios.get(
+        `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${signupData.phone_number_id}`,
+        {
+          params: {
+            fields: 'display_phone_number,verified_name,quality_rating,is_on_biz_app,platform_type'
+          },
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
         }
+      );
+      if (phoneRes?.data) {
+        phoneData = phoneRes.data;
       }
-    );
+    } catch (phoneErr) {
+      console.warn(`[EmbeddedSignup] Direct phone details fetch failed (${phoneErr.response?.data?.error?.message || phoneErr.message}), trying WABA phone numbers list...`);
+      try {
+        const wabaPhonesRes = await axios.get(
+          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${signupData.waba_id}/phone_numbers`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`
+            }
+          }
+        );
+        const matched = (wabaPhonesRes.data?.data || []).find(
+          (p) => String(p.id) === String(signupData.phone_number_id)
+        );
+        if (matched) {
+          phoneData = matched;
+        }
+      } catch (wabaErr) {
+        console.warn('[EmbeddedSignup] WABA phone numbers list fetch also failed:', wabaErr.response?.data || wabaErr.message);
+      }
+    }
 
-    const { display_phone_number, verified_name, quality_rating } = phoneRes.data;
-    const isCoexistence = isCoexistenceSignup(signupData, phoneRes.data);
+    const display_phone_number = phoneData.display_phone_number || signupData.display_phone_number || signupData.phone_number || (signupData.phone_number_id ? `+${signupData.phone_number_id}` : 'WhatsApp Business');
+    const verified_name = phoneData.verified_name || signupData.verified_name || display_phone_number;
+    const quality_rating = phoneData.quality_rating || 'UNKNOWN';
+    const isCoexistence = isCoexistenceSignup(signupData, phoneData);
 
     let phoneNumber = await WhatsappPhoneNumber.findOne({
       phone_number_id: signupData.phone_number_id
@@ -3973,8 +4001,8 @@ export const getEmbbededSignupConnection = async (req, res) => {
         display_phone_number: phoneNumber.display_phone_number,
         verified_name: phoneNumber.verified_name,
         quality_rating: phoneNumber.quality_rating,
-        is_on_biz_app: phoneRes.data.is_on_biz_app,
-        platform_type: phoneRes.data.platform_type,
+        is_on_biz_app: phoneData.is_on_biz_app || false,
+        platform_type: phoneData.platform_type || 'CLOUD_API',
         is_coexistence: isCoexistence,
         webhook_subscribed: true,
         is_new_waba: isNewWaba,
@@ -3982,10 +4010,11 @@ export const getEmbbededSignupConnection = async (req, res) => {
       }
     });
   } catch (err) {
+    if (code) processedAuthCodes.delete(code);
     console.error('Embedded signup failed:', err.response?.data || err.message);
 
     const errorData = err.response?.data?.error || {};
-    const errorMessage = errorData.message || 'Embedded signup failed';
+    const errorMessage = errorData.message || err.message || 'Embedded signup failed';
     const subcode = errorData.error_subcode;
 
     const statusCode = err.response?.status || 500;
